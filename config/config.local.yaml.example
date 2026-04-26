@@ -1,15 +1,15 @@
 # 이 파일을 복사해 config.local.yaml 로 만든 후 값을 채우세요.
 # cp config/config.local.yaml.example config/config.local.yaml
 #
-# config.local.yaml 은 .gitignore 에 등록되어 있으므로 절대 커밋되지 않습니다.
-# config.yaml 의 값을 덮어씁니다 (오버라이드).
+# config.local.yaml 은 .gitignore 에 등록되어 있어 절대 커밋되지 않습니다.
 
 server:
   port: 8080
   mode: debug
 
 database:
-  dsn: "root:YOUR_PASSWORD@tcp(localhost:3306)/ohmyagent?charset=utf8mb4&parseTime=True&loc=Local"
+  # docker-compose up 으로 띄운 MariaDB 기본 DSN
+  dsn: "ohmyagent:ohmyagent@tcp(localhost:3306)/ohmyagent?charset=utf8mb4&parseTime=True&loc=Local"
   max_conns: 10
 
 llm:

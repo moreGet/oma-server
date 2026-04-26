@@ -3,7 +3,7 @@ server:
   mode: debug   # debug | release
 
 database:
-  dsn: "root:password@tcp(localhost:3306)/ohmyagent?charset=utf8mb4&parseTime=True&loc=Local"
+  dsn: "ohmyagent:ohmyagent@tcp(localhost:3306)/ohmyagent?charset=utf8mb4&parseTime=True&loc=Local"
   max_conns: 10
 
 llm:
