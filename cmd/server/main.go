@@ -3,13 +3,15 @@
 // 의존성 조립 순서:
 //  1. config.Load
 //  2. infrastructure.NewMariaDB
-//  3. db.NewLLMProviderRepository (sqlc Queries 내부 보유)
-//  4. cache.NewProviderCache
-//  5. llm.NewLLMFactory
-//  6. application.NewLLMProviderService(repo, cache, factory)
-//  7. handler.NewLLMProviderHandler(svc)
-//  8. router.New(handler, logger)
-//  9. r.Run(cfg.ServerAddr())
+//  3. infrastructure.RunMigrations  ← Flyway 동일: 미적용 SQL 자동 실행
+//  4. db.NewLLMProviderRepository (sqlc Queries 내부 보유)
+//  5. cache.NewProviderCache
+//  6. llm.NewLLMFactory
+//  7. application.NewLLMProviderService(repo, cache, factory)
+//  8. handler.NewLLMProviderHandler(svc)
+//  9. router.New(handler, logger)
+//
+// 10. r.Run(cfg.ServerAddr())
 package main
 
 import (
@@ -60,7 +62,13 @@ func main() {
 	}
 	defer func() { _ = sqlDB.Close() }()
 
-	// 3. DB 어댑터 (port.LLMRepository 구현)
+	// 3. 마이그레이션 자동 실행 (Flyway 방식)
+	if err := infrastructure.RunMigrations(sqlDB); err != nil {
+		logger.Fatal("run migrations", zap.Error(err))
+	}
+	logger.Info("migrations applied")
+
+	// 4. DB 어댑터 (port.LLMRepository 구현)
 	repo := dbadapter.NewLLMProviderRepository(sqlDB)
 
 	// 4. 캐시 (port.ProviderCache 구현)
