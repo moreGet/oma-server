@@ -1,0 +1,24 @@
+services:
+  mariadb:
+    image: mariadb:10.11
+    container_name: ohmyagent-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: password
+      MARIADB_DATABASE: ohmyagent
+      MARIADB_USER: ohmyagent
+      MARIADB_PASSWORD: ohmyagent
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d   # 컨테이너 최초 기동 시 자동 실행
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  mariadb_data:

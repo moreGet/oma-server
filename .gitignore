@@ -1,7 +1,6 @@
 # ============================================================
 # Go
 # ============================================================
-# 빌드 결과물
 /server
 /server.exe
 *.exe
@@ -10,22 +9,17 @@
 *.so
 *.dylib
 
-# 테스트 아티팩트
 *.test
 coverage.out
 coverage.html
 *.prof
 
-# 벤더 디렉토리 (go mod 사용 시 불필요)
 /vendor/
 
 # ============================================================
 # 설정 / 시크릿
 # ============================================================
-# config.local.yaml 에 DB 비밀번호·API 키 등 민감 정보를 저장 (커밋 제외)
 config/config.local.yaml
-
-# 레거시 .env 파일도 혹시 생성될 경우를 대비해 제외
 .env
 .env.local
 .env.*.local
@@ -33,22 +27,12 @@ config/config.local.yaml
 # ============================================================
 # Claude Code
 # ============================================================
-# 머신별 절대 경로가 포함된 로컬 설정 → 커밋 제외
 .claude/settings.local.json
 
 # ============================================================
 # IDE — GoLand / IntelliJ
 # ============================================================
-# .idea/.gitignore 가 내부 제외 규칙을 관리하므로 디렉토리 자체는 커밋
-# 단, 개인 워크스페이스·히스토리 파일만 추가 제외
-.idea/workspace.xml
-.idea/tasks.xml
-.idea/usage.statistics.xml
-.idea/dictionaries/
-.idea/shelf/
-.idea/httpRequests/
-.idea/dataSources/
-.idea/dataSources.local.xml
+.idea/
 
 # IDE — VS Code
 .vscode/
