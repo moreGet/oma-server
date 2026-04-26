@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod *)",
+      "Bash(go build *)",
+      "Bash(go run *)",
+      "Bash(go test *)",
+      "Bash(go vet *)",
+      "Bash(go generate *)",
+      "Bash(go env *)",
+      "Bash(go version *)",
+      "Bash(go tool *)",
+      "Bash(sqlc *)",
+      "Bash(migrate *)",
+      "Bash(mkdir -p *)",
+      "Bash(find * -name *)",
+      "Bash(ls *)",
+      "Bash(ls -la *)",
+      "Bash(cat go.mod)",
+      "Bash(cat go.sum)"
+    ]
+  }
+}

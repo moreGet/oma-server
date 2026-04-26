@@ -1,0 +1,18 @@
+version: "2"
+sql:
+  - engine: "mysql"
+    queries: "db/query.sql"
+    schema: "db/schema.sql"
+    gen:
+      go:
+        package: "sqlcdb"
+        out: "internal/adapter/db/sqlc"
+        emit_json_tags: true
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        overrides:
+          - db_type: "tinyint(1)"
+            go_type: "bool"
+          - db_type: "json"
+            go_type: "encoding/json.RawMessage"
