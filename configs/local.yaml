@@ -1,0 +1,15 @@
+server:
+  port: 8080
+  read_timeout: "10s"
+  write_timeout: "10s"
+security:
+  allowed_origins: []          # 비면 CORS 비활성(로컬)
+database:
+  driver: "sqlite"
+  dsn: "file:aiagent.db?_pragma=busy_timeout(5000)"
+  max_open_conns: 1            # sqlite 단일 writer
+auth:
+  jwt_secret: ""               # 하드코딩 금지, env(APP_AUTH_JWT_SECRET) 주입
+  jwt_expiry: "24h"
+  seed_admin_username: "admin" # 비운영 시딩용
+  seed_admin_password: ""      # 비운영만, env(APP_AUTH_SEED_ADMIN_PASSWORD) 주입

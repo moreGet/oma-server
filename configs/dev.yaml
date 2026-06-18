@@ -1,0 +1,15 @@
+server:
+  port: 8080
+  read_timeout: "10s"
+  write_timeout: "10s"
+security:
+  allowed_origins: []
+database:
+  driver: "sqlite"
+  dsn: "file:aiagent.db?_pragma=busy_timeout(5000)"
+  max_open_conns: 1
+auth:
+  jwt_secret: ""               # env(APP_AUTH_JWT_SECRET) 주입
+  jwt_expiry: "24h"
+  seed_admin_username: "admin"
+  seed_admin_password: ""      # env(APP_AUTH_SEED_ADMIN_PASSWORD) 주입

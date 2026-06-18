@@ -1,0 +1,15 @@
+server:
+  port: 8080
+  read_timeout: "10s"
+  write_timeout: "10s"
+security:
+  allowed_origins: []          # 운영 도메인을 명시적으로 채울 것
+database:
+  driver: "mysql"
+  dsn: ""                      # env(APP_DATABASE_DSN) 주입. 예: user:pw@tcp(host:3306)/aiagent?parseTime=true
+  max_open_conns: 20
+auth:
+  jwt_secret: ""               # 운영 필수, env(APP_AUTH_JWT_SECRET) 주입(미설정 시 기동 실패)
+  jwt_expiry: "24h"
+  seed_admin_username: ""      # 운영은 시딩 금지
+  seed_admin_password: ""

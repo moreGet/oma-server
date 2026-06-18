@@ -1,0 +1,15 @@
+server:
+  port: 8080
+  read_timeout: "10s"
+  write_timeout: "10s"
+security:
+  allowed_origins: []
+database:
+  driver: "mysql"
+  dsn: ""                      # env(APP_DATABASE_DSN) 주입. 예: user:pw@tcp(db:3306)/aiagent?parseTime=true
+  max_open_conns: 10
+auth:
+  jwt_secret: ""               # env(APP_AUTH_JWT_SECRET) 주입
+  jwt_expiry: "24h"
+  seed_admin_username: "admin"
+  seed_admin_password: ""      # env(APP_AUTH_SEED_ADMIN_PASSWORD) 주입

@@ -1,173 +1,65 @@
-# QA 보고서 — LLM 제공자 동적 스위칭 시스템
+# 04. QA 보고서 (qa-engineer)
 
-본 보고서는 4단계 (qa-engineer) 산출물이다. HTTP 핸들러, Application 서비스,
-캐시 어댑터, LLM 팩토리에 대한 단위 테스트를 작성하고, 경계면 정합성을 검증했다.
+> 대상: `TEMPLATE-SPEC.md` 기준 재구성된 헥사고날 신규 코드(`com/ohmyagent/` 이하).
+> 구 테스트(구 `internal/...` 트리)는 이미 삭제되어 존재하지 않음 → 신규 테스트를 처음부터 작성.
+> Go 미설치 환경 → 실행 미검증. 시그니처·import·필드명·에러변수명을 실제 소스와 대조해 작성함.
 
-모듈명: `OhMyAgent.AiAgent.Server`
-작성일: 2026-04-26
+## 1. 작성한 테스트 파일
 
----
+| 경로 | package | 대상/커버 |
+|---|---|---|
+| `com/ohmyagent/internal/domain/auth/model_test.go` | `auth` (내부) | `RoleLevel.CanControl`(상위/동급/하위 7케이스), `CreateMemberCommand.Validate`(정상·빈/공백 username·짧은 pw·role_id 범위), `Normalize` 트림 |
+| `com/ohmyagent/internal/domain/llmprovider/model_test.go` | `llmprovider` (내부) | `CreateCommand.Validate`(LOCAL/EXTERNAL 정상·빈/공백 name·잘못된/빈 provider_type), `Normalize` |
+| `com/ohmyagent/internal/application/auth/usecase_test.go` | `authapp` (내부) | fake Repository/RoleRepository/TokenService/PasswordHasher 주입. Login(불일치·미존재·비활성→ErrInvalidCredentials, 성공→토큰+멤버), CreateMember(검증·비admin·CanControl·중복 ErrConflict·성공 시 uuid/감사/시각), ChangeRole·SetActive·Delete의 CanControl 인가, GetMember(본인/admin↑/거부), RequireAdmin(admin pass·user·비활성·미존재) |
+| `com/ohmyagent/internal/application/llmprovider/usecase_test.go` | `llmproviderapp` (내부) | fake Repository/Cache/Factory/Adapter + 비공개 `accessGate` fake 주입. Create/UpdateConfig/Activate/Delete의 gate 거부 차단, 성공 시 uuid/시각/감사, 활성 생성·UpdateConfig·Activate·Delete 후 `cache.Invalidate` 호출 검증, repo 에러 시 무효화 안 함, GetActiveAdapter 캐시 hit(repo 미호출)/miss(repo→cache.Set→factory)/무활성 에러 |
+| `com/ohmyagent/internal/adapter/out/llm/cache_test.go` | `llm` (내부) | Get 초기 false, Set→Get true+값, Invalidate→Get false, 동시성(-race) 1건 |
+| `com/ohmyagent/internal/adapter/in/http/auth_handler_test.go` | `httpin` (내부) | fake `domainauth.Service` 주입 + 실제 `SecureRouter`로 claims 주입. Login 200(토큰/멤버, **password_hash 미노출** 검증)·401·400, GetMember 200(actorID 전파)·404·403, CreateMember 201·400·409 |
+| `com/ohmyagent/internal/adapter/in/http/llmprovider_handler_test.go` | `httpin` (내부) | fake `domainllmprovider.Service`. Create 201·400·**누출된 `domainauth.ErrPermission`→403**, List 200, Activate 200(message)·404, Delete 204·404 |
+| `com/ohmyagent/internal/adapter/in/http/security/router_test.go` | `security` (내부) | MinRole 게이트: 토큰없음 401·잘못된토큰 401·레벨부족 403·충분 200·상위 200, claims context 주입 검증 |
 
-## 1. 작성된 테스트 파일 목록
+총 8개 테스트 파일. fake는 각 테스트 파일 내부에 정의(별도 mock 라이브러리 미사용, `testify/assert`·`require`만 사용).
 
-| 파일 | 대상 | 종류 | 케이스 수 |
-|------|------|------|----------|
-| `internal/application/llm_provider_service_test.go` | `application.LLMProviderService` | 단위 (mock 3종) | 11 |
-| `internal/handler/llm_provider_handler_test.go` | `handler.LLMProviderHandler` | httptest + table-driven | 6개 함수 / 23 sub-test |
-| `internal/adapter/cache/provider_cache_test.go` | `cache.providerCache` | 단위 + 동시성 | 5 |
-| `internal/adapter/llm/factory_test.go` | `llm.factory` | 단위 (table-driven) | 5개 함수 / 12 sub-test |
+### 설계상의 핵심 정합성 확인 사항
+- 핸들러 테스트는 `security.withClaims`가 비공개이므로 claims를 직접 주입할 수 없어, 실제 `SecureRouter.Secured` + 실제 `JWTTokenService`(HS256)로 토큰을 발급해 라우팅했다. 이로써 라우트 게이트 ↔ 핸들러 ↔ 에러매핑 경계면을 함께 검증한다.
+- 응답 DTO에 `PasswordHash`/`password_hash`가 노출되지 않음을 본문 문자열·JSON 키 두 방법으로 확인.
+- AppError 매핑: ErrValidation→400, ErrInvalidCredentials/ErrInvalidToken→401, ErrPermission→403, ErrNotFound→404, ErrConflict→409. provider 핸들러의 accessGate 누출(`domainauth.ErrPermission`)→403 매핑도 별도 케이스로 검증.
 
-전체 약 50+ 케이스. 테스트 패키지 모두 `_test` suffix (블랙박스).
+## 2. 발견한 경계면 이슈
 
----
+### (해소됨) 03 요약 §5의 "남은 4개 *_test.go" — 실제로는 존재하지 않음
+- 03_implementer_summary.md §5는 구 `internal/adapter/cache|llm`, `internal/application`, `internal/handler`의 `*_test.go` 4개가 컴파일을 깨뜨리니 승인 후 정리하라고 기록.
+- **실측 결과**: `internal/` 트리 전체가 이미 삭제되어 존재하지 않고, 리포 전체에 `*_test.go`가 0개였음(`find . -name '*_test.go'` 무결과). 따라서 구 테스트로 인한 컴파일 위험은 **현재 없음**. 본 작업의 신규 테스트가 첫 테스트다.
 
-## 2. 경계면 검증 체크리스트
+### 이슈 #1 (정보) — 모듈 루트는 리포 루트
+- `go.mod`(module `aiagent`)는 **리포 루트**(`OhMyAgent.AiAgent.Server/go.mod`)에 있고 코드는 `com/ohmyagent/...` 하위에 위치. import 경로 `aiagent/com/ohmyagent/internal/...`는 이 구조와 일치(정상). `go build`/`go test`는 리포 루트에서 실행해야 한다(`com/ohmyagent/go.mod`는 없음).
 
-### 2.1 핸들러 ↔ DTO JSON 필드 정합성
+### 이슈 #2 (경미) — `SetActive`의 `_ = actor` 죽은 코드
+- `application/auth/usecase.go` `SetActive`(L194)에서 `requireControl`이 반환한 `actor`를 `_ = actor`로 폐기. 기능상 무해하나 불필요. 테스트는 동작(권한·갱신)만 검증하며 이 라인에 의존하지 않음. 제안: 정리 시 `_, target, err := ...`로 변경.
 
-| 엔드포인트 | 요청 필드 | 응답 필드 | 결과 |
-|-----------|----------|-----------|------|
-| POST   /llm-providers | `name`, `provider_type`, `is_active`, `config` | `id`, `name`, `is_active`, `provider_type`, `config`, `created_at`, `updated_at` | OK |
-| PATCH  /llm-providers/:id/config | `config{endpoint,model,api_key_env,max_tokens,extra_params}` | `MessageResponse{message}` | OK |
-| 활성화 응답 | — | `{"message":"provider activated"}` | OK (테스트로 회귀) |
-| config 갱신 응답 | — | `{"message":"config updated"}` | OK |
-| 에러 응답 | — | `ErrorResponse{error, details?}` | OK |
+### 이슈 #3 (정보) — provider 조회계열(List/Get)의 actorID 미사용
+- `ProviderService.List/Get`은 `actorID`를 받지만 사용하지 않음(라우트 MinRole 게이트로만 보호, 설계 명시). 의도된 설계이므로 이슈 아님 — 기록만.
 
-`ProviderConfigDTO` 의 5개 필드 (`endpoint`, `model`, `api_key_env`, `max_tokens`, `extra_params`) 모두
-도메인 `ProviderConfig` 와 1:1 매핑. 핸들러의 `toProviderResponse` / `fromConfigDTO` 로 양방향 변환 확인.
+### 이슈 #4 (확인필요·빌드) — 빌드 검증 불가(Go 미설치)
+- 본 환경에 Go 미설치로 `go build`/`go vet`/`go test` 미실행. 테스트 코드의 import·시그니처·필드명은 소스와 대조했으나, **`go.sum` 재생성 및 의존성(testify, golang-jwt/v5, uuid 등) 다운로드 후 최초 컴파일은 사용자 환경에서 필요**.
 
-### 2.2 HTTP 상태 코드 일관성
+> 컴파일을 실제로 깨뜨릴 수준의 설계↔구현 불일치는 발견되지 않음(이슈 #1~#4 모두 경미/정보/환경). 따라서 테스트로 우회·차단한 항목 없음.
 
-| 시나리오 | 핸들러 코드 | 검증 테스트 |
-|----------|-----------|-----------|
-| 정상 List/Get/Activate/UpdateConfig | 200 | TestListProviders/TestGetProvider/TestActivateProvider/TestUpdateProviderConfig |
-| 정상 Create | 201 | TestCreateProvider |
-| 정상 Delete | 204 | TestDeleteProvider |
-| 잘못된 path id (`abc`, `-1`) | 400 | TestGetProvider/TestActivateProvider/TestUpdateProviderConfig/TestDeleteProvider |
-| 빈 body / 필수 필드 누락 | 400 | TestCreateProvider, TestUpdateProviderConfig |
-| `oneof=LOCAL EXTERNAL` 위반 | 400 | TestCreateProvider/invalid_provider_type |
-| `ErrProviderNotFound` / `ErrNoActiveProvider` | 404 | TestGetProvider/TestActivateProvider/TestDeleteProvider/TestRespondError_WrappedSentinelDetection |
-| `ErrProviderConflict` | 409 | TestCreateProvider/conflict |
-| 알 수 없는 에러 | 500 | TestListProviders/internal_error |
-
-### 2.3 서비스 → 핸들러 에러 타입 정합성 (`errors.Is`)
-
-핸들러 `respondError` 의 sentinel 매칭이 `fmt.Errorf("...: %w", domain.ErrXxx)` 래핑된 에러도 인식하는지
-회귀 테스트 추가:
-
-- `TestRespondError_WrappedSentinelDetection` → 래핑된 `ErrNoActiveProvider` → 404
-- `TestGetProvider/not_found_wrapped_error` → 래핑된 `ErrProviderNotFound` → 404
-- `TestCreateProvider/conflict` → 래핑된 `ErrProviderConflict` → 409
-- 서비스 단위 테스트의 `TestGetActiveLLMAdapter_NoActiveProvider`, `TestActivateProvider_NotFound`
-  도 `errors.Is` 로 래핑 체인 검증.
-
-### 2.4 응답 DTO ↔ 도메인 매핑
-
-`TestGetProvider/success` 와 `TestCreateProvider/success` 에서:
-- `ProviderResponse.ID == domain.LLMProvider.ID` (int64)
-- `ProviderResponse.Name == domain.LLMProvider.Name`
-- `ProviderResponse.ProviderType == string(domain.LLMProvider.ProviderType)`
-- 시간 필드 직렬화 (RFC3339) 통과 확인.
-
----
-
-## 3. 발견된 불일치 및 수정 내용
-
-### 3.1 핸들러가 concrete service 에 의존 (수정 완료)
-
-**위치:** `internal/handler/llm_provider_handler.go`
-
-**원인:** `LLMProviderHandler` 가 `*application.LLMProviderService` (concrete pointer) 에 직접 의존 →
-mock 주입 불가, 테스트 작성 시 무거운 dependency graph 필요.
-
-**수정:**
-- 핸들러 패키지 안에 인터페이스 `handler.LLMProviderServicePort` 정의
-  (서비스 메서드 6개 동일 시그니처).
-- 생성자 시그니처를 `NewLLMProviderHandler(svc LLMProviderServicePort)` 로 교체.
-- `import "OhMyAgent.AiAgent.Server/internal/application"` 제거 → 순환 가능성 차단.
-- concrete `*application.LLMProviderService` 가 메서드 시그니처를 모두 만족하므로 `cmd/server/main.go` 변경 불필요.
-
-이 변경으로 `MockLLMProviderService` 를 핸들러 테스트에 직접 주입할 수 있게 됨.
-
-### 3.2 testify 의존성이 go.mod 에 누락 (수정 완료)
-
-**위치:** `go.mod`
-
-**원인:** `go.sum` 에는 `stretchr/testify v1.8.4` 의 `.mod` 해시가 indirect 로 남아있으나
-`go.mod` 의 `require` 블록에는 미선언 → 본 단계에서 직접 사용 시 컴파일 실패.
-
-**수정:**
-- `require` 블록에 다음 추가:
-  - `github.com/stretchr/testify v1.8.4`
-- indirect 블록에 다음 추가 (testify 의존성):
-  - `github.com/davecgh/go-spew v1.1.1`
-  - `github.com/pmezard/go-difflib v1.0.0`
-  - `github.com/stretchr/objx v0.5.0`
-- `gopkg.in/yaml.v3 v3.0.1` 는 이미 존재.
-
-**주의:** 본 환경에는 Go 가 설치되어 있지 않다 (`which go` → not found). 빌드 환경에서
-`go mod tidy && go mod download` 를 실행해 `go.sum` 의 zip 해시를 보충해야 한다 (현재 go.sum 에는 .mod 해시만 존재).
-
-### 3.3 발견되었으나 수정하지 않은 항목
-
-- 캐시 어댑터(`internal/adapter/cache/provider_cache.go`)의 `Set` 은 `nil` 인자 방어 코드 없음. 단,
-  도메인 컨벤션 상 호출 측에서 nil 을 넘기지 않도록 통제하므로 (`s.cache.Set(provider)` 는 항상 fetched provider) 부작용 없음.
-- 핸들러는 `ListProviders` 에서 빈 배열을 `[]dto.ProviderResponse{}` 로 반환 (`make([]dto.ProviderResponse, 0, ...)`) →
-  JSON 직렬화 시 `null` 이 아닌 `[]` 로 나오는지 회귀 테스트 추가됨 (`TestListProviders/empty`).
-- `ActivateProviderRequest` 가 빈 구조체로 정의되어 있으나 핸들러에서 미사용. 미래 확장 여지로 보존.
-
----
-
-## 4. 테스트 실행 명령어
+## 3. 빌드/실행 권장 명령 (리포 루트에서)
 
 ```bash
-# 의존성 보강 (최초 1회)
-go mod tidy
-go mod download
-
-# 전체 테스트 실행
-go test ./...
-
-# race detector 활성화 (캐시 동시성 검증 필수)
-go test -race ./...
-
-# 패키지별
-go test -v ./internal/application/...
-go test -v ./internal/handler/...
-go test -v -race ./internal/adapter/cache/...
-go test -v ./internal/adapter/llm/...
-
-# 커버리지
-go test -cover ./internal/...
+cd OhMyAgent.AiAgent.Server
+go mod tidy            # go.sum 재생성 (testify/golang-jwt/uuid/goose/cors/sqlite/mysql/yaml/bcrypt)
+go build ./...         # 신규 트리 전체 컴파일
+go vet ./...
+go test ./...          # 전체 테스트
+go test -race ./com/ohmyagent/internal/adapter/out/llm/...   # 캐시 동시성 검증
+go test ./... -cover   # 커버리지
 ```
 
----
-
-## 5. 알려진 한계사항
-
-1. **Go 미설치 환경:** 본 환경에서는 `go test` 실행 불가. 모든 테스트 코드는 정적 분석만 수행. 사용자 환경에서 `go mod tidy` 실행 후 `go test ./...` 로 검증 필요.
-2. **DB 어댑터 테스트 미포함:** `internal/adapter/db/...` 의 sqlc 기반 레포지토리는 통합 테스트(`//go:build integration`) 영역으로 분리. 본 단계에서는 `port.LLMRepository` 를 mock 으로 대체하여 application/handler 만 검증.
-3. **미들웨어 테스트 미포함:** `internal/middleware/{recovery,logger,cors}.go` 는 향후 별도 세트로 작성 권장.
-4. **LLM 어댑터 stub 검증 미포함:** ollama/claude/openai adapter 의 `Complete()` 가 모두 스텁 문자열을 반환하므로 별도 테스트 가치 낮음. 실제 HTTP 호출 구현 후 어댑터 테스트 추가.
-5. **Singleflight 미적용:** 캐시 미스 동시 발생 시 multiple repo 호출 가능. 동시성 테스트는 캐시 자체의 race-free 만 보장.
-6. **Auth/Authn 미검증:** 현재 핸들러에 인증 미들웨어가 없으므로 권한 테스트 불필요. 향후 인증 도입 시 401/403 케이스 추가.
-7. **시간 필드 비교:** `TestGetProvider/success` 는 `time.Time` 필드 직렬화 통과만 확인하고 정확한 RFC3339 매칭은 생략. 필요 시 `assert.WithinDuration` 추가.
-
----
-
-## 6. 회귀 보장 요약
-
-- DTO JSON 태그 변경 시 → handler 테스트의 unmarshal 단계에서 fail.
-- `domain.ErrXxx` 추가/변경 시 → handler 테스트의 status 매핑 검증에서 fail.
-- 서비스 메서드 시그니처 변경 시 → `LLMProviderServicePort` 와 `*LLMProviderService` 간 인터페이스 만족 실패로 컴파일 fail (main.go 단계).
-- 캐시 atomic.Value 의 typed-nil 처리 회귀 → `TestProviderCache_Invalidate` 가 panic 으로 fail.
-- 팩토리 분기 규칙 변경 (모델명 키워드) 시 → `TestFactory_CreateExternalClaude/openai` 의 `IsType` assertion 으로 즉시 fail.
-
----
-
-## 7. 후속 단계 권고
-
-1. **CI 통합:** GitHub Actions / GitLab CI 에 `go test -race -coverprofile=cov.out ./...` 단계 추가.
-2. **통합 테스트:** docker-compose 로 MariaDB 띄우고 마이그레이션 + 라이프사이클 e2e (`//go:build integration`).
-3. **fuzz 테스트:** `parseIDParam`, JSON binding 에 대해 `testing.F` 적용.
-4. **벤치마크:** `BenchmarkProviderCache_Get/Set` 으로 atomic.Value vs sync.RWMutex 정량 비교.
+## 4. 커버리지 요약(의도)
+- **도메인 순수 로직**: RoleLevel 비교·두 커맨드 Validate/Normalize 전 분기 커버.
+- **application(유스케이스)**: 인증·인가 게이트(CanControl, RequireAdmin), 캐시 무효화 트리거, 캐시 hit/miss 폴백 흐름을 fake로 결정적 커버.
+- **adapter/out/llm 캐시**: 상태 전이(empty→set→invalidate) + race.
+- **adapter/in/http**: 정상 상태코드/JSON + 전 도메인 에러→HTTP 매핑 + 비밀필드 미노출.
+- **security**: RBAC 라우트 게이트(401/403/통과) + claims 주입.
+- 미커버(의도): DB repository(실DB·통합 테스트 영역), JWT 만료/alg-confusion 음성 케이스, main.go 조립/시딩.
