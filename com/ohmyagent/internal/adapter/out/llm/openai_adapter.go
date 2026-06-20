@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -23,7 +24,7 @@ const (
 	openAIStreamBufferMax = 1 << 20 // SSE 한 줄 최대 1MiB
 )
 
-// OpenAIAdapter 는 OpenAI Chat Completions API(스트리밍) 어댑터다.
+// OpenAIAdapter 는 OpenAI Chat Completions API(스트리밍, function-calling) 어댑터다.
 type OpenAIAdapter struct {
 	endpoint  string
 	model     string
@@ -67,9 +68,34 @@ func (a *OpenAIAdapter) chatURL() string {
 
 // --- OpenAI 와이어 포맷 ---
 
+type openAIFunctionCall struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+type openAIToolCall struct {
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function openAIFunctionCall `json:"function"`
+}
+
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	Name       string           `json:"name,omitempty"`
+}
+
+type openAITool struct {
+	Type     string             `json:"type"` // "function"
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 type openAIStreamOptions struct {
@@ -81,6 +107,8 @@ type openAIChatRequest struct {
 	Messages      []openAIMessage      `json:"messages"`
 	Stream        bool                 `json:"stream"`
 	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	Tools         []openAITool         `json:"tools,omitempty"`
+	ToolChoice    string               `json:"tool_choice,omitempty"`
 	MaxTokens     int                  `json:"max_tokens,omitempty"`
 	Temperature   *float64             `json:"temperature,omitempty"`
 }
@@ -88,7 +116,15 @@ type openAIChatRequest struct {
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -99,7 +135,52 @@ type openAIStreamChunk struct {
 	} `json:"usage"`
 }
 
+// toolCallBuilder 는 스트리밍으로 조각조각 오는 tool_call 을 index 별로 누적한다.
+type toolCallBuilder struct {
+	id   string
+	name string
+	args strings.Builder
+}
+
+func toOpenAIMessages(msgs []domainllmprovider.ChatMessage) []openAIMessage {
+	out := make([]openAIMessage, 0, len(msgs))
+	for _, m := range msgs {
+		om := openAIMessage{Role: string(m.Role), Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name}
+		if len(m.ToolCalls) > 0 {
+			om.ToolCalls = make([]openAIToolCall, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				om.ToolCalls = append(om.ToolCalls, openAIToolCall{
+					ID:       tc.ID,
+					Type:     "function",
+					Function: openAIFunctionCall{Name: tc.Name, Arguments: tc.Arguments},
+				})
+			}
+		}
+		out = append(out, om)
+	}
+	return out
+}
+
+func toOpenAITools(tools []domainllmprovider.ToolDefinition) []openAITool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]openAITool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, openAITool{
+			Type: "function",
+			Function: openAIToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  json.RawMessage(t.Parameters),
+			},
+		})
+	}
+	return out
+}
+
 // ChatStream 은 OpenAI Chat Completions 를 stream=true 로 호출하고 응답 조각을 onChunk 로 전달한다.
+// 도구가 있으면 function-calling 으로 전달하고, 스트리밍으로 오는 tool_call 조각을 누적해 최종 조각에 담는다.
 func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
 	apiKey := ""
 	if a.apiKeyEnv != "" {
@@ -109,17 +190,17 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		return fmt.Errorf("openai: %w: API key not set (config api_key_env=%q)", domainllmprovider.ErrUpstream, a.apiKeyEnv)
 	}
 
-	msgs := make([]openAIMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		msgs = append(msgs, openAIMessage{Role: string(m.Role), Content: m.Content})
-	}
 	payload := openAIChatRequest{
 		Model:         a.resolveModel(req.Model),
-		Messages:      msgs,
+		Messages:      toOpenAIMessages(req.Messages),
 		Stream:        true,
 		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
+		Tools:         toOpenAITools(req.Tools),
 		MaxTokens:     req.MaxTokens,
 		Temperature:   req.Temperature,
+	}
+	if len(payload.Tools) > 0 {
+		payload.ToolChoice = "auto"
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -148,6 +229,7 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 	var (
 		finishReason string
 		usage        *domainllmprovider.ChatUsage
+		toolCalls    = map[int]*toolCallBuilder{}
 	)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamBufferMax)
@@ -162,7 +244,6 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		}
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			// 비정상 조각은 건너뛴다(주석/keep-alive 등).
 			continue
 		}
 		if chunk.Usage != nil {
@@ -172,15 +253,30 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 				TotalTokens:      chunk.Usage.TotalTokens,
 			}
 		}
-		if len(chunk.Choices) > 0 {
-			c := chunk.Choices[0]
-			if c.FinishReason != nil && *c.FinishReason != "" {
-				finishReason = *c.FinishReason
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		c := chunk.Choices[0]
+		if c.FinishReason != nil && *c.FinishReason != "" {
+			finishReason = *c.FinishReason
+		}
+		for _, tc := range c.Delta.ToolCalls {
+			b := toolCalls[tc.Index]
+			if b == nil {
+				b = &toolCallBuilder{}
+				toolCalls[tc.Index] = b
 			}
-			if c.Delta.Content != "" {
-				if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: c.Delta.Content}); err != nil {
-					return err
-				}
+			if tc.ID != "" {
+				b.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				b.name = tc.Function.Name
+			}
+			b.args.WriteString(tc.Function.Arguments)
+		}
+		if c.Delta.Content != "" {
+			if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: c.Delta.Content}); err != nil {
+				return err
 			}
 		}
 	}
@@ -188,5 +284,28 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		return fmt.Errorf("openai: %w: read stream: %v", domainllmprovider.ErrUpstream, err)
 	}
 
-	return onChunk(domainllmprovider.ChatStreamChunk{Done: true, FinishReason: finishReason, Usage: usage})
+	return onChunk(domainllmprovider.ChatStreamChunk{
+		Done:         true,
+		FinishReason: finishReason,
+		ToolCalls:    buildToolCalls(toolCalls),
+		Usage:        usage,
+	})
+}
+
+// buildToolCalls 는 index 순으로 정렬해 완성된 도구 호출 슬라이스를 만든다.
+func buildToolCalls(m map[int]*toolCallBuilder) []domainllmprovider.ToolCall {
+	if len(m) == 0 {
+		return nil
+	}
+	idxs := make([]int, 0, len(m))
+	for i := range m {
+		idxs = append(idxs, i)
+	}
+	sort.Ints(idxs)
+	out := make([]domainllmprovider.ToolCall, 0, len(idxs))
+	for _, i := range idxs {
+		b := m[i]
+		out = append(out, domainllmprovider.ToolCall{ID: b.id, Name: b.name, Arguments: b.args.String()})
+	}
+	return out
 }

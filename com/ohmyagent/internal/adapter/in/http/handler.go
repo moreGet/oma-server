@@ -52,6 +52,55 @@ func Handle(h HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// agentErrorBody 는 agent 대상 엔드포인트(health/models/agent/*)의 중첩 에러 envelope 이다.
+// 클라이언트 계약: { "error": { "code": "...", "message": "..." } } (소문자 코드).
+type agentErrorBody struct {
+	Error agentErrorDetail `json:"error"`
+}
+
+type agentErrorDetail struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// agentCode 는 AppError 의 HTTP 상태를 클라이언트 계약의 소문자 코드로 매핑한다.
+func agentCode(ae *AppError) string {
+	switch ae.HTTPStatus() {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	default:
+		return "backend_error"
+	}
+}
+
+// HandleAgent 는 Handle 과 같되, 에러를 클라이언트 계약의 중첩 envelope 으로 직렬화한다.
+// (SSE 핸들러는 스트리밍 시작 후에는 nil 을 반환하고 에러를 SSE 이벤트로 보낸다.)
+func HandleAgent(h HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("agent handler panic", "error", rec, "path", r.URL.Path, "stack", string(debug.Stack()))
+				writeJSON(w, http.StatusInternalServerError, agentErrorBody{agentErrorDetail{Code: "backend_error", Message: "internal server error"}})
+			}
+		}()
+		if err := h(w, r); err != nil {
+			ae := toAppError(err)
+			if ae.HTTPStatus() >= 500 {
+				slog.Error("agent request failed", "code", ae.Code, "error", err, "path", r.URL.Path)
+			}
+			writeJSON(w, ae.HTTPStatus(), agentErrorBody{agentErrorDetail{Code: agentCode(ae), Message: ae.Message}})
+		}
+	}
+}
+
 // AppError 는 전 API 공통 에러 envelope 이다(스펙 §5.2).
 type AppError struct {
 	Code    string `json:"code"`

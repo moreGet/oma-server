@@ -20,8 +20,10 @@ import (
 	authout "aiagent/com/ohmyagent/internal/adapter/out/auth"
 	dbout "aiagent/com/ohmyagent/internal/adapter/out/db"
 	llmout "aiagent/com/ohmyagent/internal/adapter/out/llm"
+	agentapp "aiagent/com/ohmyagent/internal/application/agent"
 	authapp "aiagent/com/ohmyagent/internal/application/auth"
 	chatapp "aiagent/com/ohmyagent/internal/application/chat"
+	chatsessionapp "aiagent/com/ohmyagent/internal/application/chatsession"
 	llmproviderapp "aiagent/com/ohmyagent/internal/application/llmprovider"
 	"aiagent/com/ohmyagent/internal/config"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
@@ -71,6 +73,7 @@ func run() error {
 	roleRepo := dbout.NewRoleRepository(conn)
 	memberRepo := dbout.NewMemberRepository(conn)
 	providerRepo := dbout.NewLLMProviderRepository(conn)
+	sessionRepo := dbout.NewChatSessionRepository(conn)
 	hasher := authout.NewBcryptHasher(0)
 	tokenSvc := security.NewJWTTokenService(cfg.Auth.JWTSecret, cfg.Auth.JWTExpiry.Std())
 	providerCache := llmout.NewCache()
@@ -79,7 +82,9 @@ func run() error {
 	// 4) 유스케이스(auth → provider 에 accessGate 주입)
 	authUC := authapp.NewAuthUseCase(memberRepo, roleRepo, hasher, tokenSvc)
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, authUC)
-	chatUC := chatapp.NewChatService(providerUC) // providerUC 가 활성 어댑터 resolver 를 충족
+	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
+	agentUC := agentapp.NewAgentService(providerUC) // 에이전트 루프(tools/function-calling) 중계
+	sessionUC := chatsessionapp.NewSessionService(sessionRepo)
 
 	// 5) 비운영 환경 시딩
 	if cfg.SeedsInitialAdmin() {
@@ -92,6 +97,11 @@ func run() error {
 	authH := httpin.NewAuthHandler(authUC)
 	provH := httpin.NewProviderHandler(providerUC)
 	chatH := httpin.NewChatHandler(chatUC)
+	agentH := httpin.NewAgentHandler(agentUC)
+	healthH := httpin.NewHealthHandler(conn)
+	modelsH := httpin.NewModelsHandler(providerUC)
+	suggestionH := httpin.NewSuggestionHandler()
+	sessionH := httpin.NewSessionHandler(sessionUC)
 
 	// 7) 라우트 등록(설계 §7)
 	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
@@ -114,6 +124,22 @@ func run() error {
 
 	// 질의(클라이언트 → 활성 LLM → SSE 응답). 인증된 사용자(user↑) 누구나.
 	router.Secured("POST /api/v1/chat", httpin.Handle(chatH.Stream), security.MinRole(domainauth.RoleLevelUser))
+
+	// --- C# 에이전트 클라이언트 계약(API_CONTRACT) ---
+	// 에러 envelope 은 클라이언트 계약대로 { "error": { code, message } } (HandleAgent).
+	router.Public("GET /api/v1/health", httpin.HandleAgent(healthH.Check)) // 헬스/연결 체크(인증 불필요)
+
+	router.Secured("GET /api/v1/models", httpin.HandleAgent(modelsH.List), security.MinRole(domainauth.RoleLevelUser))
+
+	// 에이전트 루프의 심장: 대화기록 + 도구스키마 → SSE(텍스트/도구호출/stop_reason).
+	router.Secured("POST /api/v1/agent/chat", httpin.HandleAgent(agentH.Chat), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agent/suggestions", httpin.HandleAgent(suggestionH.List), security.MinRole(domainauth.RoleLevelUser))
+
+	// 채팅 히스토리 서버 동기화(소유권 스코프).
+	router.Secured("GET /api/v1/agent/sessions", httpin.HandleAgent(sessionH.List), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Get), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("PUT /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Upsert), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Delete), security.MinRole(domainauth.RoleLevelUser))
 
 	// 8) 미들웨어 체인 + 서버
 	handler := security.Chain(router.Mux(), cfg.Security.AllowedOrigins)

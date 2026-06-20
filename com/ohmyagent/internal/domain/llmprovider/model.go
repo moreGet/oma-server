@@ -63,21 +63,43 @@ const (
 	ChatRoleSystem    ChatRole = "system"
 	ChatRoleUser      ChatRole = "user"
 	ChatRoleAssistant ChatRole = "assistant"
+	ChatRoleTool      ChatRole = "tool" // 도구 실행 결과 메시지(멀티턴 에이전트 루프)
 )
 
+// ToolDefinition 은 LLM function-calling 에 전달하는 도구(함수) 스키마다.
+// Parameters 는 JSON Schema(object) 원문 바이트다(도메인은 JSON 비의존, 어댑터가 그대로 전달).
+type ToolDefinition struct {
+	Name        string
+	Description string
+	Parameters  []byte // raw JSON Schema
+}
+
+// ToolCall 은 LLM 이 요청한 도구 호출이다. Arguments 는 JSON 문자열.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
 // ChatMessage 는 대화 한 턴이다.
+//   - role=assistant + ToolCalls: 모델이 이전 턴에 요청한 도구 호출(히스토리 재생용)
+//   - role=tool + ToolCallID/Content: 그 도구의 실행 결과
 type ChatMessage struct {
-	Role    ChatRole
-	Content string
+	Role       ChatRole
+	Content    string
+	ToolCallID string     // role=tool: 어떤 호출에 대한 결과인지
+	ToolCalls  []ToolCall // role=assistant: 모델이 만든 도구 호출
+	Name       string     // 선택적 도구/함수 이름
 }
 
 // ChatRequest 는 어댑터에 전달되는 채팅 질의다.
 // Model 이 비면 Provider 설정의 Model 을 사용한다(어댑터가 결정).
 type ChatRequest struct {
 	Messages    []ChatMessage
-	Model       string   // 선택적 오버라이드("" = Provider 기본 모델)
-	MaxTokens   int      // 0 = 미지정
-	Temperature *float64 // nil = 미지정
+	Tools       []ToolDefinition // function-calling 도구 스키마(비면 일반 채팅)
+	Model       string           // 선택적 오버라이드("" = Provider 기본 모델)
+	MaxTokens   int              // 0 = 미지정
+	Temperature *float64         // nil = 미지정
 }
 
 // ChatUsage 는 토큰 사용량이다(제공자가 보고할 때만 채워짐).
@@ -88,10 +110,11 @@ type ChatUsage struct {
 }
 
 // ChatStreamChunk 는 스트리밍 응답의 한 조각이다.
-// Done=true 이면 마지막 조각(FinishReason/Usage 동반 가능)이다.
+// Done=true 이면 마지막 조각(FinishReason/Usage/ToolCalls 동반 가능)이다.
 type ChatStreamChunk struct {
 	Delta        string     // 증분 텍스트
-	FinishReason string     // 완료 사유(stop/length 등)
+	ToolCalls    []ToolCall // 완성된 도구 호출(주로 마지막 조각에 동반)
+	FinishReason string     // 제공자 원문 완료 사유(stop/length/tool_calls/end_turn/tool_use 등)
 	Done         bool       // 마지막 조각 여부
 	Usage        *ChatUsage // 최종 조각에서 제공자가 보고한 사용량
 }

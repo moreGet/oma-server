@@ -58,9 +58,30 @@ func (a *OllamaAdapter) chatURL() string {
 
 // --- Ollama 와이어 포맷 ---
 
+type ollamaFunctionCall struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"` // Ollama 는 객체로 주고받음
+}
+
+type ollamaToolCall struct {
+	Function ollamaFunctionCall `json:"function"`
+}
+
 type ollamaMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
+}
+
+type ollamaToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type ollamaTool struct {
+	Type     string             `json:"type"` // "function"
+	Function ollamaToolFunction `json:"function"`
 }
 
 type ollamaOptions struct {
@@ -71,14 +92,16 @@ type ollamaOptions struct {
 type ollamaChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
+	Tools    []ollamaTool    `json:"tools,omitempty"`
 	Stream   bool            `json:"stream"`
 	Options  *ollamaOptions  `json:"options,omitempty"`
 }
 
-// Ollama 스트리밍은 줄 단위 JSON(NDJSON)이다. 각 줄이 한 조각, done=true 가 마지막.
+// Ollama 스트리밍은 줄 단위 JSON(NDJSON). 각 줄이 한 조각, done=true 가 마지막.
 type ollamaChatChunk struct {
 	Message struct {
-		Content string `json:"content"`
+		Content   string           `json:"content"`
+		ToolCalls []ollamaToolCall `json:"tool_calls"`
 	} `json:"message"`
 	Done            bool   `json:"done"`
 	DoneReason      string `json:"done_reason"`
@@ -86,15 +109,42 @@ type ollamaChatChunk struct {
 	EvalCount       int    `json:"eval_count"`
 }
 
+func toOllamaMessages(msgs []domainllmprovider.ChatMessage) []ollamaMessage {
+	out := make([]ollamaMessage, 0, len(msgs))
+	for _, m := range msgs {
+		om := ollamaMessage{Role: string(m.Role), Content: m.Content}
+		for _, tc := range m.ToolCalls {
+			args := json.RawMessage(tc.Arguments)
+			if len(args) == 0 {
+				args = json.RawMessage("{}")
+			}
+			om.ToolCalls = append(om.ToolCalls, ollamaToolCall{Function: ollamaFunctionCall{Name: tc.Name, Arguments: args}})
+		}
+		out = append(out, om)
+	}
+	return out
+}
+
+func toOllamaTools(tools []domainllmprovider.ToolDefinition) []ollamaTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]ollamaTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, ollamaTool{
+			Type:     "function",
+			Function: ollamaToolFunction{Name: t.Name, Description: t.Description, Parameters: json.RawMessage(t.Parameters)},
+		})
+	}
+	return out
+}
+
 // ChatStream 은 Ollama /api/chat 을 stream=true 로 호출하고 응답 조각을 onChunk 로 전달한다.
 func (a *OllamaAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	msgs := make([]ollamaMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		msgs = append(msgs, ollamaMessage{Role: string(m.Role), Content: m.Content})
-	}
 	payload := ollamaChatRequest{
 		Model:    a.resolveModel(req.Model),
-		Messages: msgs,
+		Messages: toOllamaMessages(req.Messages),
+		Tools:    toOllamaTools(req.Tools),
 		Stream:   true,
 	}
 	if req.Temperature != nil || req.MaxTokens > 0 {
@@ -122,6 +172,7 @@ func (a *OllamaAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		return fmt.Errorf("ollama: %w: status %d: %s", domainllmprovider.ErrUpstream, resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
+	var collectedToolCalls []domainllmprovider.ToolCall
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
@@ -132,6 +183,12 @@ func (a *OllamaAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		var chunk ollamaChatChunk
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
 			continue
+		}
+		for _, tc := range chunk.Message.ToolCalls {
+			collectedToolCalls = append(collectedToolCalls, domainllmprovider.ToolCall{
+				Name:      tc.Function.Name,
+				Arguments: string(tc.Function.Arguments),
+			})
 		}
 		if chunk.Message.Content != "" {
 			if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: chunk.Message.Content}); err != nil {
@@ -144,12 +201,16 @@ func (a *OllamaAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 				CompletionTokens: chunk.EvalCount,
 				TotalTokens:      chunk.PromptEvalCount + chunk.EvalCount,
 			}
-			return onChunk(domainllmprovider.ChatStreamChunk{Done: true, FinishReason: chunk.DoneReason, Usage: usage})
+			return onChunk(domainllmprovider.ChatStreamChunk{
+				Done:         true,
+				FinishReason: chunk.DoneReason,
+				ToolCalls:    collectedToolCalls,
+				Usage:        usage,
+			})
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("ollama: %w: read stream: %v", domainllmprovider.ErrUpstream, err)
 	}
-	// done 조각을 못 받고 스트림이 끝난 경우에도 종료 조각을 1회 보낸다.
-	return onChunk(domainllmprovider.ChatStreamChunk{Done: true})
+	return onChunk(domainllmprovider.ChatStreamChunk{Done: true, ToolCalls: collectedToolCalls})
 }
