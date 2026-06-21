@@ -48,6 +48,9 @@ func (s *fakeProviderService) Activate(ctx context.Context, cmd domainllmprovide
 func (s *fakeProviderService) Delete(ctx context.Context, cmd domainllmprovider.DeleteCommand) error {
 	return s.deleteErr
 }
+func (s *fakeProviderService) TestConnection(ctx context.Context, actorID, id string) error {
+	return s.getErr
+}
 func (s *fakeProviderService) GetActiveAdapter(ctx context.Context) (domainllmprovider.Adapter, error) {
 	return nil, nil
 }

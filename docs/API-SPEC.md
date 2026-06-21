@@ -196,3 +196,37 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 | `DELETE /api/v1/agent/sessions/{id}` | 삭제(204) |
 
 > 서버는 세션 `data` 를 불투명 JSON 으로 보관(소유자·시각만 관리). 클라이언트가 로컬 영속 대신/병행 사용 가능.
+
+---
+
+## 관리자(Admin) 기능
+
+### 권한 모델 (요구 3)
+| 역할 | level | 제어 범위 |
+|---|---|---|
+| super_admin | 2 | admin·user 제어 + 멤버 삭제 + 전역 |
+| admin | 1 | user 제어, 멤버/Provider 관리 |
+| user | 0 | **읽기 전용**(본인 계정·Provider/모델 조회·질의 API 사용) |
+
+상위만 하위를 제어(`RoleLevel.CanControl`). 멤버 삭제는 super_admin 전용.
+
+### 기본 super_admin 시딩
+서버 기동 시 super_admin 이 **하나도 없으면 항상 생성**한다(모든 환경). 비밀번호는 `APP_AUTH_SEED_ADMIN_PASSWORD` 우선,
+미설정 시 **랜덤 생성 후 기동 로그에 1회 경고 출력**(로그인 후 즉시 변경 권장). 사용자명은 `APP_AUTH_SEED_ADMIN_USERNAME`(기본 `admin`).
+
+### 추가 관리 JSON API
+| 메서드·경로 | 최소 역할 | 기능 |
+|---|---|---|
+| `GET /api/v1/me` | user | 현재 로그인 사용자 |
+| `PUT /api/v1/me/password` | user | 본인 비밀번호 변경 `{old_password,new_password}` |
+| `GET /api/v1/roles` | user | 역할 목록(드롭다운) |
+| `PUT /api/v1/members/{id}/password` | admin | 하위 멤버 비밀번호 리셋 `{new_password}` (CanControl) |
+| `POST /api/v1/llm-providers/{id}/test` | admin | Provider 연결 테스트(1토큰 ping) |
+| `GET /api/v1/statistics` | admin | 대시보드 집계 `{members:{total,by_role}, providers:{total,active}}` |
+
+### 어드민 웹 페이지 (`/admin`)
+- **스택**: 서버사이드 렌더링 `html/template` + **htmx**(CDN) + **Pico.css**(CDN). Node 빌드 불필요, Go 바이너리에 `go:embed`.
+- **인증**: 로그인 시 JWT 를 **HttpOnly·SameSite=Lax 쿠키**(`admin_session`)에 저장. 페이지는 쿠키로 인증(API 의 Bearer 와 독립).
+- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록·생성·역할변경·활성토글·비번리셋·삭제), `/admin/providers`(목록·생성·설정수정·활성화·연결테스트·삭제), `/admin/account`(비번 변경).
+- **권한 UI 게이팅**: USER 는 읽기 전용(멤버 메뉴 숨김, Provider 변경 버튼 숨김). 백엔드 use case 가 이중으로 인가 강제.
+- 같은 오리진이라 CORS 불필요. (CSRF 는 SameSite=Lax 로 1차 완화; 토큰 기반 CSRF 는 후속.)

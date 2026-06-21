@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 
 	httpin "aiagent/com/ohmyagent/internal/adapter/in/http"
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
+	"aiagent/com/ohmyagent/internal/adapter/in/web"
 	authout "aiagent/com/ohmyagent/internal/adapter/out/auth"
 	dbout "aiagent/com/ohmyagent/internal/adapter/out/db"
 	llmout "aiagent/com/ohmyagent/internal/adapter/out/llm"
@@ -86,12 +89,13 @@ func run() error {
 	agentUC := agentapp.NewAgentService(providerUC) // 에이전트 루프(tools/function-calling) 중계
 	sessionUC := chatsessionapp.NewSessionService(sessionRepo)
 
-	// 5) 비운영 환경 시딩
+	// 5) 시딩: super_admin 은 모든 환경에서 항상 보장(없으면 생성). 샘플 Provider 는 비운영만.
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), seedTimeout)
+	ensureSuperAdmin(seedCtx, log, cfg, memberRepo, hasher)
 	if cfg.SeedsInitialAdmin() {
-		seedCtx, seedCancel := context.WithTimeout(context.Background(), seedTimeout)
-		seedInitialAdmin(seedCtx, log, cfg, memberRepo, hasher, providerRepo)
-		seedCancel()
+		seedSampleProvider(seedCtx, log, providerRepo)
 	}
+	seedCancel()
 
 	// 6) 핸들러
 	authH := httpin.NewAuthHandler(authUC)
@@ -102,11 +106,18 @@ func run() error {
 	modelsH := httpin.NewModelsHandler(providerUC)
 	suggestionH := httpin.NewSuggestionHandler()
 	sessionH := httpin.NewSessionHandler(sessionUC)
+	statsH := httpin.NewStatsHandler(authUC, providerUC)
+	webServer := web.NewServer(authUC, providerUC, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
 	// 7) 라우트 등록(설계 §7)
 	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
 
 	router.Public("POST /api/v1/auth/login", httpin.Handle(authH.Login))
+
+	// 본인 정보·비밀번호·역할목록(인증된 사용자)
+	router.Secured("GET /api/v1/me", httpin.Handle(authH.Me), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("PUT /api/v1/me/password", httpin.Handle(authH.ChangePassword), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/roles", httpin.Handle(authH.ListRoles), security.MinRole(domainauth.RoleLevelUser))
 
 	router.Secured("GET /api/v1/members", httpin.Handle(authH.ListMembers), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("POST /api/v1/members", httpin.Handle(authH.CreateMember), security.MinRole(domainauth.RoleLevelAdmin))
@@ -114,6 +125,7 @@ func run() error {
 	router.Secured("PUT /api/v1/members/{id}/role", httpin.Handle(authH.ChangeRole), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("PUT /api/v1/members/{id}/active", httpin.Handle(authH.SetActive), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("DELETE /api/v1/members/{id}", httpin.Handle(authH.DeleteMember), security.MinRole(domainauth.RoleLevelSuperAdmin))
+	router.Secured("PUT /api/v1/members/{id}/password", httpin.Handle(authH.ResetPassword), security.MinRole(domainauth.RoleLevelAdmin))
 
 	router.Secured("GET /api/v1/llm-providers", httpin.Handle(provH.List), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/llm-providers/{id}", httpin.Handle(provH.Get), security.MinRole(domainauth.RoleLevelUser))
@@ -121,6 +133,10 @@ func run() error {
 	router.Secured("PATCH /api/v1/llm-providers/{id}/config", httpin.Handle(provH.UpdateConfig), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("PUT /api/v1/llm-providers/{id}/activate", httpin.Handle(provH.Activate), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("DELETE /api/v1/llm-providers/{id}", httpin.Handle(provH.Delete), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("POST /api/v1/llm-providers/{id}/test", httpin.Handle(provH.Test), security.MinRole(domainauth.RoleLevelAdmin))
+
+	// 대시보드 집계(admin↑)
+	router.Secured("GET /api/v1/statistics", httpin.Handle(statsH.Get), security.MinRole(domainauth.RoleLevelAdmin))
 
 	// 질의(클라이언트 → 활성 LLM → SSE 응답). 인증된 사용자(user↑) 누구나.
 	router.Secured("POST /api/v1/chat", httpin.Handle(chatH.Stream), security.MinRole(domainauth.RoleLevelUser))
@@ -140,6 +156,9 @@ func run() error {
 	router.Secured("GET /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Get), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("PUT /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Upsert), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("DELETE /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Delete), security.MinRole(domainauth.RoleLevelUser))
+
+	// 어드민 웹 페이지(htmx + html/template, 쿠키 인증) 마운트: /admin
+	webServer.Register(router.Mux())
 
 	// 8) 미들웨어 체인 + 서버
 	handler := security.Chain(router.Mux(), cfg.Security.AllowedOrigins)
@@ -177,47 +196,77 @@ func run() error {
 	}
 }
 
-// seedInitialAdmin 은 비운영 환경에서 super_admin 멤버와 샘플 Provider 를 생성한다.
-// 이미 존재하면(중복) 무시한다. 실패는 로깅만 하고 기동을 막지 않는다(편의 기능).
-func seedInitialAdmin(
+// ensureSuperAdmin 은 super_admin 이 하나도 없으면 항상(모든 환경) 생성한다.
+// 비밀번호: env(APP_AUTH_SEED_ADMIN_PASSWORD) 우선, 없으면 랜덤 생성 후 1회 경고 로그.
+// 실패는 로깅만 하고 기동을 막지 않는다.
+func ensureSuperAdmin(
 	ctx context.Context,
 	log *slog.Logger,
 	cfg *config.Config,
 	members domainauth.Repository,
 	hasher domainauth.PasswordHasher,
-	providers domainllmprovider.Repository,
 ) {
+	if _, total, err := members.List(ctx, domainauth.MemberFilter{RoleID: domainauth.RoleIDSuperAdmin}); err != nil {
+		log.Error("ensure super admin: list failed", "error", err)
+		return
+	} else if total > 0 {
+		return // 이미 존재 → 아무 것도 하지 않음
+	}
+
 	username := cfg.Auth.SeedAdminUsername
 	if username == "" {
 		username = defaultSeedAdminUsername
 	}
 	password := cfg.Auth.SeedAdminPassword
+	generated := false
 	if password == "" {
-		log.Warn("seed admin skipped: APP_AUTH_SEED_ADMIN_PASSWORD not set")
-	} else if _, err := members.FindByUsername(ctx, username); errors.Is(err, domainauth.ErrNotFound) {
-		hash, herr := hasher.Hash(password)
-		if herr != nil {
-			log.Error("seed admin: hash failed", "error", herr)
-		} else {
-			now := time.Now().UTC().Truncate(time.Second)
-			admin := domainauth.Member{
-				ID:           uuid.NewString(),
-				Username:     username,
-				PasswordHash: hash,
-				Active:       true,
-				Role:         domainauth.Role{ID: domainauth.RoleIDSuperAdmin, Name: domainauth.NameForRoleID(domainauth.RoleIDSuperAdmin), Level: domainauth.RoleLevelSuperAdmin},
-				CreatedAt:    now,
-				UpdatedAt:    now,
-			}
-			if err := members.Save(ctx, admin); err != nil {
-				log.Error("seed admin: save failed", "error", err)
-			} else {
-				log.Info("seed admin created", "username", username)
-			}
+		pw, err := randomPassword(16)
+		if err != nil {
+			log.Error("ensure super admin: generate password failed", "error", err)
+			return
 		}
+		password, generated = pw, true
 	}
 
-	// 샘플 Provider(활성). 이미 존재하면 무시.
+	hash, err := hasher.Hash(password)
+	if err != nil {
+		log.Error("ensure super admin: hash failed", "error", err)
+		return
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	admin := domainauth.Member{
+		ID:           uuid.NewString(),
+		Username:     username,
+		PasswordHash: hash,
+		Active:       true,
+		Role:         domainauth.Role{ID: domainauth.RoleIDSuperAdmin, Name: domainauth.NameForRoleID(domainauth.RoleIDSuperAdmin), Level: domainauth.RoleLevelSuperAdmin},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := members.Save(ctx, admin); err != nil {
+		log.Error("ensure super admin: save failed", "error", err)
+		return
+	}
+	if generated {
+		// 보안: 생성된 비밀번호는 이 로그에 1회만 노출된다. 로그인 후 즉시 변경할 것.
+		log.Warn("super admin created with GENERATED password — change it immediately after login",
+			"username", username, "password", password)
+	} else {
+		log.Info("super admin created", "username", username)
+	}
+}
+
+// randomPassword 는 URL-safe 랜덤 비밀번호를 생성한다.
+func randomPassword(nBytes int) (string, error) {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// seedSampleProvider 는 비운영 환경에서 활성 Provider 가 없으면 샘플(local-ollama)을 생성한다.
+func seedSampleProvider(ctx context.Context, log *slog.Logger, providers domainllmprovider.Repository) {
 	if _, err := providers.GetActive(ctx); errors.Is(err, domainllmprovider.ErrNoActiveProvider) {
 		now := time.Now().UTC().Truncate(time.Second)
 		sample := domainllmprovider.LLMProvider{

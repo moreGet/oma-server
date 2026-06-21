@@ -18,6 +18,11 @@ func withClaims(ctx context.Context, claims domainauth.Claims) context.Context {
 	return context.WithValue(ctx, claimsKey, claims)
 }
 
+// WithClaims 는 claims 를 context 에 주입한 새 context 를 반환한다(쿠키 기반 웹 어댑터 등 외부 인증 경로용).
+func WithClaims(ctx context.Context, claims domainauth.Claims) context.Context {
+	return withClaims(ctx, claims)
+}
+
 // ClaimsFrom 은 context 에서 claims 를 추출한다. 없으면 ok=false.
 func ClaimsFrom(ctx context.Context) (domainauth.Claims, bool) {
 	claims, ok := ctx.Value(claimsKey).(domainauth.Claims)

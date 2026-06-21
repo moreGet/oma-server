@@ -128,6 +128,18 @@ func (r *MemberRepository) List(ctx context.Context, filter domainauth.MemberFil
 	return out, total, nil
 }
 
+// UpdatePassword 는 password_hash + 감사필드를 갱신한다. 0행 → domainauth.ErrNotFound.
+func (r *MemberRepository) UpdatePassword(ctx context.Context, id, passwordHash string, updatedAt int64, updatedBy string) error {
+	res, err := r.db.ExecContext(ctx,
+		"UPDATE members SET password_hash=?, updated_at=?, updated_by=? WHERE id=?",
+		passwordHash, updatedAt, nullString(updatedBy), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update member password id=%s: %w", id, err)
+	}
+	return checkMemberAffected(res)
+}
+
 // Delete 는 ID 기준 삭제. 0행 → domainauth.ErrNotFound.
 func (r *MemberRepository) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, "DELETE FROM members WHERE id=?", id)

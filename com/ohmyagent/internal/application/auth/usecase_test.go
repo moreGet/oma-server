@@ -85,6 +85,15 @@ func (r *fakeMemberRepo) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (r *fakeMemberRepo) UpdatePassword(ctx context.Context, id, passwordHash string, updatedAt int64, updatedBy string) error {
+	if m, ok := r.byID[id]; ok {
+		m.PasswordHash = passwordHash
+		r.add(m)
+		return nil
+	}
+	return domainauth.ErrNotFound
+}
+
 // fakeRoleRepo implements domainauth.RoleRepository.
 type fakeRoleRepo struct{}
 

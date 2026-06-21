@@ -70,6 +70,16 @@ func (s *fakeAuthService) DeleteMember(ctx context.Context, actorID, targetID st
 	return s.getMemberErr
 }
 
+func (s *fakeAuthService) ChangePassword(ctx context.Context, actorID, oldPassword, newPassword string) error {
+	return s.getMemberErr
+}
+func (s *fakeAuthService) ResetPassword(ctx context.Context, actorID, targetID, newPassword string) error {
+	return s.getMemberErr
+}
+func (s *fakeAuthService) ListRoles(ctx context.Context) ([]domainauth.Role, error) {
+	return nil, nil
+}
+
 func (s *fakeAuthService) RequireActiveMember(ctx context.Context, actorID string) (domainauth.Member, error) {
 	return domainauth.Member{}, nil
 }

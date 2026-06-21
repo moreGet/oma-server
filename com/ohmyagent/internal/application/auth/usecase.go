@@ -209,6 +209,48 @@ func (u *AuthUseCase) DeleteMember(ctx context.Context, actorID, targetID string
 	return u.members.Delete(ctx, targetID)
 }
 
+// --- 비밀번호 / 역할 ---
+
+// ChangePassword 는 본인 비밀번호를 변경한다(기존 비번 확인 필요).
+func (u *AuthUseCase) ChangePassword(ctx context.Context, actorID, oldPassword, newPassword string) error {
+	actor, err := u.RequireActiveMember(ctx, actorID)
+	if err != nil {
+		return err
+	}
+	if err := u.hasher.Compare(actor.PasswordHash, oldPassword); err != nil {
+		return domainauth.ErrInvalidCredentials
+	}
+	if len(newPassword) < domainauth.MinPasswordLength {
+		return &domainauth.ErrValidation{Msg: "password must be >= 8 chars"}
+	}
+	hash, err := u.hasher.Hash(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	return u.members.UpdatePassword(ctx, actor.ID, hash, u.now().Unix(), actor.ID)
+}
+
+// ResetPassword 는 admin↑ 가 제어 가능한 하위 멤버의 비밀번호를 리셋한다(기존 비번 불필요).
+func (u *AuthUseCase) ResetPassword(ctx context.Context, actorID, targetID, newPassword string) error {
+	actor, _, err := u.requireControl(ctx, actorID, targetID)
+	if err != nil {
+		return err
+	}
+	if len(newPassword) < domainauth.MinPasswordLength {
+		return &domainauth.ErrValidation{Msg: "password must be >= 8 chars"}
+	}
+	hash, err := u.hasher.Hash(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	return u.members.UpdatePassword(ctx, targetID, hash, u.now().Unix(), actor.ID)
+}
+
+// ListRoles 는 역할 목록(마스터데이터)을 반환한다.
+func (u *AuthUseCase) ListRoles(ctx context.Context) ([]domainauth.Role, error) {
+	return u.roles.List(ctx)
+}
+
 // requireControl 은 actor 가 admin↑ 이고 target 을 제어 가능(상위 레벨)한지 검증하고 둘을 반환한다.
 func (u *AuthUseCase) requireControl(ctx context.Context, actorID, targetID string) (domainauth.Member, domainauth.Member, error) {
 	actor, err := u.RequireActiveMember(ctx, actorID)

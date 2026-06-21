@@ -149,9 +149,81 @@ func (h *AuthHandler) DeleteMember(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
+// --- GET /api/v1/me ---
+
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) error {
+	claims, _ := security.ClaimsFrom(r.Context())
+	member, err := h.svc.GetMember(r.Context(), claims.MemberID, claims.MemberID)
+	if err != nil {
+		return authErrToHTTP(err)
+	}
+	writeJSON(w, http.StatusOK, toMemberResp(member))
+	return nil
+}
+
+// --- PUT /api/v1/me/password ---
+
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) error {
+	defer func() { _ = r.Body.Close() }()
+	claims, _ := security.ClaimsFrom(r.Context())
+	var req changePasswordReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return ErrBadRequest("invalid request body")
+	}
+	if err := h.svc.ChangePassword(r.Context(), claims.MemberID, req.OldPassword, req.NewPassword); err != nil {
+		return authErrToHTTP(err)
+	}
+	writeJSON(w, http.StatusOK, messageResp{Message: "password changed"})
+	return nil
+}
+
+// --- PUT /api/v1/members/{id}/password (admin↑ 가 하위 멤버 리셋) ---
+
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
+	defer func() { _ = r.Body.Close() }()
+	claims, _ := security.ClaimsFrom(r.Context())
+	var req resetPasswordReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return ErrBadRequest("invalid request body")
+	}
+	if err := h.svc.ResetPassword(r.Context(), claims.MemberID, r.PathValue("id"), req.NewPassword); err != nil {
+		return authErrToHTTP(err)
+	}
+	writeJSON(w, http.StatusOK, messageResp{Message: "password reset"})
+	return nil
+}
+
+// --- GET /api/v1/roles ---
+
+func (h *AuthHandler) ListRoles(w http.ResponseWriter, r *http.Request) error {
+	roles, err := h.svc.ListRoles(r.Context())
+	if err != nil {
+		return authErrToHTTP(err)
+	}
+	items := make([]roleResp, 0, len(roles))
+	for _, role := range roles {
+		items = append(items, roleResp{ID: role.ID, Name: role.Name, Level: int(role.Level)})
+	}
+	writeJSON(w, http.StatusOK, rolesResp{Roles: items})
+	return nil
+}
+
 // ---------------------------------------------------------------------------
-// DTO (snake_case, PasswordHash 노출 금지)
+// DTO (snake_case, PasswordHash 노출 금지). messageResp 는 llmprovider_handler.go 에 정의됨.
 // ---------------------------------------------------------------------------
+
+type changePasswordReq struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+type resetPasswordReq struct {
+	NewPassword string `json:"new_password"`
+}
+
+type rolesResp struct {
+	Roles []roleResp `json:"roles"`
+}
 
 type loginReq struct {
 	Username string `json:"username"`

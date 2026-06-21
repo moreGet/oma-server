@@ -121,6 +121,17 @@ func (h *ProviderHandler) Delete(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// --- POST /api/v1/llm-providers/{id}/test (연결 테스트) ---
+
+func (h *ProviderHandler) Test(w http.ResponseWriter, r *http.Request) error {
+	claims, _ := security.ClaimsFrom(r.Context())
+	if err := h.svc.TestConnection(r.Context(), claims.MemberID, r.PathValue("id")); err != nil {
+		return providerErrToHTTP(err)
+	}
+	writeJSON(w, http.StatusOK, messageResp{Message: "connection ok"})
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // DTO (snake_case, gin binding 태그 → 커맨드 Validate 로 대체)
 // ---------------------------------------------------------------------------
@@ -202,6 +213,10 @@ func providerErrToHTTP(err error) error {
 		return ErrNotFound("no active llm provider")
 	case errors.Is(err, domainllmprovider.ErrConflict):
 		return ErrConflict("provider already exists")
+	case errors.Is(err, domainllmprovider.ErrChatUnsupported):
+		return ErrBadGateway("provider does not support chat")
+	case errors.Is(err, domainllmprovider.ErrUpstream):
+		return ErrBadGateway("provider connection failed")
 	// accessGate(authUC) 가 반환하는 인가 에러가 새는 경우 매핑.
 	case errors.Is(err, domainauth.ErrPermission):
 		return ErrForbidden("permission denied")

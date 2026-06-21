@@ -10,7 +10,8 @@ type Service interface {
 	UpdateConfig(ctx context.Context, cmd UpdateConfigCommand) (LLMProvider, error)
 	Activate(ctx context.Context, cmd ActivateCommand) error
 	Delete(ctx context.Context, cmd DeleteCommand) error
-	GetActiveAdapter(ctx context.Context) (Adapter, error) // 캐시 → DB 폴백 → 팩토리
+	TestConnection(ctx context.Context, actorID, id string) error // 지정 Provider 연결 테스트(admin↑)
+	GetActiveAdapter(ctx context.Context) (Adapter, error)        // 캐시 → DB 폴백 → 팩토리
 }
 
 // Repository — out 포트(영속화). 손작성 repository(sqlc 제거).

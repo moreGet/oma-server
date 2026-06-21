@@ -118,6 +118,32 @@ func (s *ProviderService) Delete(ctx context.Context, cmd domainllmprovider.Dele
 	return nil
 }
 
+// providerTestTimeout 은 연결 테스트 1회의 한도다.
+const providerTestTimeout = 10 * time.Second
+
+// TestConnection 은 지정 Provider 로 최소 질의(1토큰)를 보내 연결을 검증한다(admin↑).
+// 성공 시 nil, 외부 호출 실패 시 ErrUpstream(또는 도메인 에러)을 반환한다.
+func (s *ProviderService) TestConnection(ctx context.Context, actorID, id string) error {
+	if err := s.gate.RequireAdmin(ctx, actorID); err != nil {
+		return err
+	}
+	p, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	adapter, err := s.factory.CreateAdapter(p)
+	if err != nil {
+		return err
+	}
+	testCtx, cancel := context.WithTimeout(ctx, providerTestTimeout)
+	defer cancel()
+	req := domainllmprovider.ChatRequest{
+		Messages:  []domainllmprovider.ChatMessage{{Role: domainllmprovider.ChatRoleUser, Content: "ping"}},
+		MaxTokens: 1,
+	}
+	return adapter.ChatStream(testCtx, req, func(domainllmprovider.ChatStreamChunk) error { return nil })
+}
+
 // GetActiveAdapter 는 캐시 → DB 폴백 → 팩토리 순으로 활성 Provider 의 어댑터를 반환한다.
 func (s *ProviderService) GetActiveAdapter(ctx context.Context) (domainllmprovider.Adapter, error) {
 	provider, ok := s.cache.Get()
