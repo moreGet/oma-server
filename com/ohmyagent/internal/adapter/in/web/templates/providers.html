@@ -1,0 +1,70 @@
+{{define "content"}}
+<h2>LLM Provider</h2>
+
+{{if .CanManage}}
+<article>
+  <header>새 Provider 등록</header>
+  <form method="post" action="/admin/providers">
+    <div class="grid">
+      <input type="text" name="name" placeholder="이름(예: openai)" required>
+      <select name="provider_type" required>
+        <option value="EXTERNAL">EXTERNAL (API)</option>
+        <option value="LOCAL">LOCAL (Ollama 등)</option>
+      </select>
+      <input type="text" name="model" placeholder="모델(예: gpt-4o-mini / claude-3-5-sonnet-latest / llama3)">
+    </div>
+    <div class="grid">
+      <input type="text" name="endpoint" placeholder="endpoint(선택, 비우면 기본값)">
+      <input type="text" name="api_key_env" placeholder="API키 환경변수명(예: OPENAI_API_KEY)">
+      <input type="number" name="max_tokens" placeholder="max_tokens(선택)">
+      <label><input type="checkbox" name="is_active"> 활성</label>
+    </div>
+    <button type="submit">등록</button>
+  </form>
+  <small class="muted">시크릿은 DB 에 저장하지 않습니다. API 키는 서버 환경변수로 두고 이름만 입력하세요.</small>
+</article>
+{{end}}
+
+<figure>
+<table>
+  <thead>
+    <tr><th>이름</th><th>타입</th><th>모델</th><th>활성</th>{{if .CanManage}}<th>작업</th>{{end}}</tr>
+  </thead>
+  <tbody>
+    {{range $p := .Data.Providers}}
+    <tr>
+      <td>{{$p.Name}}</td>
+      <td><span class="badge">{{$p.Type}}</span></td>
+      <td><small>{{$p.Model}}</small></td>
+      <td>{{if $p.Active}}<span class="ok">● 활성</span>{{else}}<span class="off">○</span>{{end}}</td>
+      {{if $.CanManage}}
+      <td class="actions">
+        {{if not $p.Active}}
+        <form method="post" action="/admin/providers/{{$p.ID}}/activate">
+          <button type="submit" class="outline">활성화</button>
+        </form>
+        {{end}}
+        <form method="post" action="/admin/providers/{{$p.ID}}/test">
+          <button type="submit" class="secondary outline">연결테스트</button>
+        </form>
+        <details>
+          <summary role="button" class="outline">설정수정</summary>
+          <form method="post" action="/admin/providers/{{$p.ID}}/config">
+            <input type="text" name="model" value="{{$p.Model}}" placeholder="모델">
+            <input type="text" name="endpoint" value="{{$p.Endpoint}}" placeholder="endpoint">
+            <input type="text" name="api_key_env" value="{{$p.APIKeyEnv}}" placeholder="api_key_env">
+            <input type="number" name="max_tokens" value="{{$p.MaxTokens}}" placeholder="max_tokens">
+            <button type="submit">저장</button>
+          </form>
+        </details>
+        <form method="post" action="/admin/providers/{{$p.ID}}/delete" hx-confirm="이 Provider 를 삭제할까요?">
+          <button type="submit" class="contrast outline">삭제</button>
+        </form>
+      </td>
+      {{end}}
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+</figure>
+{{end}}

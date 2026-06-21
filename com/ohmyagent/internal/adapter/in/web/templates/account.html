@@ -1,0 +1,15 @@
+{{define "content"}}
+<h2>내 계정</h2>
+<article>
+  <header>{{.User.Username}} <span class="badge">{{.User.Role}}</span></header>
+  <form method="post" action="/admin/account/password">
+    <label>현재 비밀번호
+      <input type="password" name="old_password" autocomplete="current-password" required>
+    </label>
+    <label>새 비밀번호 (8자 이상)
+      <input type="password" name="new_password" autocomplete="new-password" required minlength="8">
+    </label>
+    <button type="submit">비밀번호 변경</button>
+  </form>
+</article>
+{{end}}

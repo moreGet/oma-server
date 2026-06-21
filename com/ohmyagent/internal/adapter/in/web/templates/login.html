@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>로그인 · OhMyAgent Admin</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    main { max-width: 24rem; margin: 8vh auto; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <hgroup>
+      <h1>⚙ OhMyAgent Admin</h1>
+      <p>관리자 로그인</p>
+    </hgroup>
+    {{if .Error}}<article style="color:var(--pico-del-color)">{{.Error}}</article>{{end}}
+    <form method="post" action="/admin/login">
+      <label>아이디
+        <input type="text" name="username" autocomplete="username" required autofocus>
+      </label>
+      <label>비밀번호
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit">로그인</button>
+    </form>
+  </main>
+</body>
+</html>

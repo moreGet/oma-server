@@ -1,0 +1,32 @@
+{{define "content"}}
+<h2>대시보드</h2>
+<div class="grid-cards">
+  {{if .Data.ShowMembers}}
+  <article>
+    <header>멤버</header>
+    <h3 style="margin:0">{{.Data.MemberTotal}}</h3>
+    <small class="muted">전체 멤버</small>
+  </article>
+  {{range .Data.ByRole}}
+  <article>
+    <header>{{.Name}}</header>
+    <h3 style="margin:0">{{.Count}}</h3>
+    <small class="muted">역할별</small>
+  </article>
+  {{end}}
+  {{end}}
+  <article>
+    <header>Provider</header>
+    <h3 style="margin:0">{{.Data.ProviderTotal}}</h3>
+    <small class="muted">등록된 LLM Provider</small>
+  </article>
+  <article>
+    <header>활성 Provider</header>
+    <h3 style="margin:0">{{if .Data.ActiveProvider}}{{.Data.ActiveProvider}}{{else}}<span class="muted">없음</span>{{end}}</h3>
+    <small class="muted">현재 질의 대상</small>
+  </article>
+</div>
+{{if not .CanManageMembers}}
+<p class="muted">※ USER 권한은 읽기 전용입니다. 멤버·Provider 변경은 관리자에게 문의하세요.</p>
+{{end}}
+{{end}}

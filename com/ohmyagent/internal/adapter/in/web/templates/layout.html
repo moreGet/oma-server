@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · OhMyAgent Admin</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    nav .brand { font-weight: 700; }
+    .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+    .muted { color: var(--pico-muted-color); }
+    table .actions form { display: inline; margin: 0; }
+    .badge { padding: .1rem .5rem; border-radius: 1rem; font-size: .75rem; background: var(--pico-secondary-background); }
+    .ok { color: green; } .off { color: var(--pico-muted-color); }
+  </style>
+</head>
+<body hx-boost="true">
+  <nav class="container-fluid">
+    <ul>
+      <li><span class="brand">⚙ OhMyAgent Admin</span></li>
+    </ul>
+    <ul>
+      <li><a href="/admin/" {{if eq .Active "dashboard"}}aria-current="page"{{end}}>대시보드</a></li>
+      {{if .CanManageMembers}}<li><a href="/admin/members" {{if eq .Active "members"}}aria-current="page"{{end}}>멤버</a></li>{{end}}
+      <li><a href="/admin/providers" {{if eq .Active "providers"}}aria-current="page"{{end}}>Provider</a></li>
+      <li><a href="/admin/account" {{if eq .Active "account"}}aria-current="page"{{end}}>내 계정</a></li>
+    </ul>
+    <ul>
+      <li><small class="muted">{{.User.Username}} · {{.User.Role}}</small></li>
+      <li>
+        <form method="post" action="/admin/logout" style="margin:0">
+          <button type="submit" class="secondary outline">로그아웃</button>
+        </form>
+      </li>
+    </ul>
+  </nav>
+  <main class="container">
+    {{if .Flash}}<article>{{.Flash}}</article>{{end}}
+    {{template "content" .}}
+  </main>
+</body>
+</html>
