@@ -8,9 +8,14 @@ import (
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
 
-// claudeModelPrefix 는 EXTERNAL 모델을 ClaudeAdapter 로 분기하는 모델명 접두사다.
-// 실제 Anthropic 모델 ID(claude-3-5-sonnet-latest 등)를 모두 포괄한다.
-const claudeModelPrefix = "claude"
+// EXTERNAL Provider 를 모델명 접두사로 어댑터에 분기한다.
+//   - claude* → ClaudeAdapter (Anthropic, 예: claude-3-5-sonnet-latest)
+//   - gemini* → GeminiAdapter (Google, 예: gemini-1.5-flash)
+//   - 그 외   → OpenAIAdapter (기본 외부 모델)
+const (
+	claudeModelPrefix = "claude"
+	geminiModelPrefix = "gemini"
+)
 
 // 컴파일 타임 인터페이스 만족 검증.
 var _ domainllmprovider.Factory = (*Factory)(nil)
@@ -26,16 +31,22 @@ func NewFactory() *Factory { return &Factory{} }
 // 분기 규칙:
 //   - LOCAL    → OllamaAdapter
 //   - EXTERNAL & model 이 "claude" 로 시작 → ClaudeAdapter
+//   - EXTERNAL & model 이 "gemini" 로 시작 → GeminiAdapter
 //   - EXTERNAL & 그 외 → OpenAIAdapter (기본 외부 모델)
 func (f *Factory) CreateAdapter(provider domainllmprovider.LLMProvider) (domainllmprovider.Adapter, error) {
 	switch provider.ProviderType {
 	case domainllmprovider.ProviderTypeLocal:
 		return NewOllamaAdapter(provider.Config), nil
 	case domainllmprovider.ProviderTypeExternal:
-		if strings.HasPrefix(strings.ToLower(provider.Config.Model), claudeModelPrefix) {
+		model := strings.ToLower(provider.Config.Model)
+		switch {
+		case strings.HasPrefix(model, claudeModelPrefix):
 			return NewClaudeAdapter(provider.Config), nil
+		case strings.HasPrefix(model, geminiModelPrefix):
+			return NewGeminiAdapter(provider.Config), nil
+		default:
+			return NewOpenAIAdapter(provider.Config), nil
 		}
-		return NewOpenAIAdapter(provider.Config), nil
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", provider.ProviderType)
 	}

@@ -308,6 +308,22 @@ func TestAuthUseCase_CreateMember(t *testing.T) {
 		})
 		assert.ErrorIs(t, err, domainauth.ErrPermission)
 	})
+
+	t.Run("super_admin cannot create a peer super_admin (CanControl is strict)", func(t *testing.T) {
+		// 이 경계가 어드민 UI 의 역할 드롭다운 필터링(제어 가능한 역할만 노출)을 정당화한다.
+		// 드롭다운이 super_admin 을 노출하면 super_admin 이 골라도 CanControl(2,2)=false 로 항상 실패한다.
+		repo := newFakeMemberRepo()
+		repo.add(member("super1", "super", 3, true)) // super_admin level
+		uc := NewAuthUseCase(repo, &fakeRoleRepo{}, &fakeHasher{match: true}, &fakeTokenService{})
+
+		_, err := uc.CreateMember(ctx, domainauth.CreateMemberCommand{
+			Username: "newsuper",
+			Password: "password1",
+			RoleID:   3,
+			ActorID:  "super1",
+		})
+		assert.ErrorIs(t, err, domainauth.ErrPermission)
+	})
 }
 
 // ---------------------------------------------------------------------------

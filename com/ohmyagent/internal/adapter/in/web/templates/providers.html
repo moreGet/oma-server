@@ -1,70 +1,128 @@
 {{define "content"}}
-<h2>LLM Provider</h2>
-
 {{if .CanManage}}
-<article>
-  <header>새 Provider 등록</header>
-  <form method="post" action="/admin/providers">
-    <div class="grid">
-      <input type="text" name="name" placeholder="이름(예: openai)" required>
-      <select name="provider_type" required>
-        <option value="EXTERNAL">EXTERNAL (API)</option>
-        <option value="LOCAL">LOCAL (Ollama 등)</option>
-      </select>
-      <input type="text" name="model" placeholder="모델(예: gpt-4o-mini / claude-3-5-sonnet-latest / llama3)">
-    </div>
-    <div class="grid">
-      <input type="text" name="endpoint" placeholder="endpoint(선택, 비우면 기본값)">
-      <input type="text" name="api_key_env" placeholder="API키 환경변수명(예: OPENAI_API_KEY)">
-      <input type="number" name="max_tokens" placeholder="max_tokens(선택)">
-      <label><input type="checkbox" name="is_active"> 활성</label>
-    </div>
-    <button type="submit">등록</button>
-  </form>
-  <small class="muted">시크릿은 DB 에 저장하지 않습니다. API 키는 서버 환경변수로 두고 이름만 입력하세요.</small>
-</article>
+<div class="card mb-4">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-plus-circle me-1"></i> 새 Provider 등록</div>
+  <div class="card-body">
+    <form method="post" action="/admin/providers" class="row g-3">
+      <input type="hidden" name="provider_type" id="provType" value="EXTERNAL">
+      <div class="col-12 col-md-4">
+        <label class="form-label small text-secondary">종류</label>
+        <select id="provPreset" class="form-select">
+          <option value="openai">OpenAI (API)</option>
+          <option value="claude">Anthropic Claude (API)</option>
+          <option value="gemini">Google Gemini (API)</option>
+          <option value="ollama">Ollama (Local)</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label small text-secondary">이름</label>
+        <input type="text" name="name" id="provName" class="form-control" placeholder="예: openai" required>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label small text-secondary">모델</label>
+        <input type="text" name="model" id="provModel" class="form-control" placeholder="모델 ID">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label small text-secondary">endpoint</label>
+        <input type="text" name="endpoint" id="provEndpoint" class="form-control" placeholder="비우면 기본값">
+      </div>
+      <div class="col-12 col-md-4" id="provKeyWrap">
+        <label class="form-label small text-secondary">API 키 환경변수명</label>
+        <input type="text" name="api_key_env" id="provKey" class="form-control" placeholder="예: OPENAI_API_KEY">
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label small text-secondary">max_tokens</label>
+        <input type="number" name="max_tokens" class="form-control" placeholder="선택">
+      </div>
+      <div class="col-12 d-flex align-items-center gap-3">
+        <div class="form-check">
+          <input type="checkbox" name="is_active" class="form-check-input" id="pactive">
+          <label class="form-check-label" for="pactive">등록 즉시 활성화</label>
+        </div>
+        <button type="submit" class="btn btn-primary ms-auto"><i class="bi bi-plus-lg"></i> 등록</button>
+      </div>
+    </form>
+    <p class="text-secondary small mt-3 mb-0"><i class="bi bi-shield-lock me-1"></i>종류를 고르면 endpoint·API 키 환경변수·기본 모델이 자동 입력됩니다(수정 가능). 시크릿은 DB 에 저장하지 않으며 API 키는 서버 환경변수로 두고 <b>이름만</b> 입력하세요.</p>
+    <script>
+    (function () {
+      var PRESETS = {
+        openai: { type:"EXTERNAL", endpoint:"https://api.openai.com/v1", key:"OPENAI_API_KEY", model:"gpt-4o-mini", name:"openai" },
+        claude: { type:"EXTERNAL", endpoint:"https://api.anthropic.com", key:"ANTHROPIC_API_KEY", model:"claude-3-5-sonnet-latest", name:"claude" },
+        gemini: { type:"EXTERNAL", endpoint:"", key:"GEMINI_API_KEY", model:"gemini-1.5-flash", name:"gemini" },
+        ollama: { type:"LOCAL", endpoint:"http://localhost:11434", key:"", model:"llama3", name:"ollama" }
+      };
+      var sel = document.getElementById("provPreset");
+      if (!sel) return;
+      var type = document.getElementById("provType"), name = document.getElementById("provName"),
+          model = document.getElementById("provModel"), ep = document.getElementById("provEndpoint"),
+          key = document.getElementById("provKey"), keyWrap = document.getElementById("provKeyWrap");
+      function apply() {
+        var p = PRESETS[sel.value];
+        if (!p) return;
+        type.value = p.type;
+        ep.value = p.endpoint;
+        ep.placeholder = p.endpoint || "기본값(SDK 관리)";
+        model.value = p.model;
+        key.value = p.key;
+        keyWrap.style.display = (p.type === "LOCAL") ? "none" : "";
+        if (!name.value || PRESETS[name.value]) name.value = p.name;
+      }
+      sel.addEventListener("change", apply);
+      apply();
+    })();
+    </script>
+  </div>
+</div>
 {{end}}
 
-<figure>
-<table>
-  <thead>
-    <tr><th>이름</th><th>타입</th><th>모델</th><th>활성</th>{{if .CanManage}}<th>작업</th>{{end}}</tr>
-  </thead>
-  <tbody>
-    {{range $p := .Data.Providers}}
-    <tr>
-      <td>{{$p.Name}}</td>
-      <td><span class="badge">{{$p.Type}}</span></td>
-      <td><small>{{$p.Model}}</small></td>
-      <td>{{if $p.Active}}<span class="ok">● 활성</span>{{else}}<span class="off">○</span>{{end}}</td>
-      {{if $.CanManage}}
-      <td class="actions">
-        {{if not $p.Active}}
-        <form method="post" action="/admin/providers/{{$p.ID}}/activate">
-          <button type="submit" class="outline">활성화</button>
-        </form>
+<div class="card">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-hdd-stack me-1"></i> Provider 목록</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr><th>이름</th><th>타입</th><th>모델</th><th>상태</th>{{if .CanManage}}<th class="text-end">작업</th>{{end}}</tr>
+      </thead>
+      <tbody>
+        {{range $p := .Data.Providers}}
+        <tr>
+          <td class="fw-semibold">{{$p.Name}}</td>
+          <td><span class="badge rounded-pill badge-{{$p.Type}}">{{$p.Type}}</span></td>
+          <td>{{if $p.Model}}<span class="mono">{{$p.Model}}</span>{{else}}<span class="text-secondary">—</span>{{end}}</td>
+          <td>
+            {{if $p.Active}}<span class="status on"><span class="dot"></span>활성</span>
+            {{else}}<span class="status off"><span class="dot"></span>비활성</span>{{end}}
+          </td>
+          {{if $.CanManage}}
+          <td>
+            <div class="d-flex flex-wrap gap-2 justify-content-end">
+              {{if not $p.Active}}
+              <form method="post" action="/admin/providers/{{$p.ID}}/activate">
+                <button type="submit" class="btn btn-sm btn-outline-light">활성화</button>
+              </form>
+              {{end}}
+              <form method="post" action="/admin/providers/{{$p.ID}}/test">
+                <button type="submit" class="btn btn-sm btn-outline-info"><i class="bi bi-plug"></i> 연결테스트</button>
+              </form>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#edit-{{$p.ID}}"><i class="bi bi-sliders"></i> 설정</button>
+              <form method="post" action="/admin/providers/{{$p.ID}}/delete" onsubmit="return confirm('이 Provider 를 삭제할까요?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+              </form>
+            </div>
+            <div class="collapse mt-2" id="edit-{{$p.ID}}">
+              <form method="post" action="/admin/providers/{{$p.ID}}/config" class="row g-2 justify-content-end">
+                <div class="col-6 col-lg-3"><input type="text" name="model" value="{{$p.Model}}" class="form-control form-control-sm" placeholder="모델"></div>
+                <div class="col-6 col-lg-3"><input type="text" name="endpoint" value="{{$p.Endpoint}}" class="form-control form-control-sm" placeholder="endpoint"></div>
+                <div class="col-6 col-lg-3"><input type="text" name="api_key_env" value="{{$p.APIKeyEnv}}" class="form-control form-control-sm" placeholder="api_key_env"></div>
+                <div class="col-6 col-lg-2"><input type="number" name="max_tokens" value="{{$p.MaxTokens}}" class="form-control form-control-sm" placeholder="max_tokens"></div>
+                <div class="col-lg-1 d-grid"><button type="submit" class="btn btn-sm btn-primary">저장</button></div>
+              </form>
+            </div>
+          </td>
+          {{end}}
+        </tr>
         {{end}}
-        <form method="post" action="/admin/providers/{{$p.ID}}/test">
-          <button type="submit" class="secondary outline">연결테스트</button>
-        </form>
-        <details>
-          <summary role="button" class="outline">설정수정</summary>
-          <form method="post" action="/admin/providers/{{$p.ID}}/config">
-            <input type="text" name="model" value="{{$p.Model}}" placeholder="모델">
-            <input type="text" name="endpoint" value="{{$p.Endpoint}}" placeholder="endpoint">
-            <input type="text" name="api_key_env" value="{{$p.APIKeyEnv}}" placeholder="api_key_env">
-            <input type="number" name="max_tokens" value="{{$p.MaxTokens}}" placeholder="max_tokens">
-            <button type="submit">저장</button>
-          </form>
-        </details>
-        <form method="post" action="/admin/providers/{{$p.ID}}/delete" hx-confirm="이 Provider 를 삭제할까요?">
-          <button type="submit" class="contrast outline">삭제</button>
-        </form>
-      </td>
-      {{end}}
-    </tr>
-    {{end}}
-  </tbody>
-</table>
-</figure>
+      </tbody>
+    </table>
+  </div>
+</div>
 {{end}}

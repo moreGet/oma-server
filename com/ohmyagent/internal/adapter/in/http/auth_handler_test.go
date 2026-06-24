@@ -31,6 +31,8 @@ type fakeAuthService struct {
 	createMember    domainauth.Member
 	createMemberErr error
 
+	rolesResult []domainauth.Role
+
 	lastActorID string
 }
 
@@ -59,14 +61,17 @@ func (s *fakeAuthService) CreateMember(ctx context.Context, cmd domainauth.Creat
 }
 
 func (s *fakeAuthService) ChangeRole(ctx context.Context, cmd domainauth.ChangeRoleCommand) (domainauth.Member, error) {
+	s.lastActorID = cmd.ActorID
 	return s.getMember, s.getMemberErr
 }
 
 func (s *fakeAuthService) SetActive(ctx context.Context, cmd domainauth.SetActiveCommand) (domainauth.Member, error) {
+	s.lastActorID = cmd.ActorID
 	return s.getMember, s.getMemberErr
 }
 
 func (s *fakeAuthService) DeleteMember(ctx context.Context, actorID, targetID string) error {
+	s.lastActorID = actorID
 	return s.getMemberErr
 }
 
@@ -77,7 +82,7 @@ func (s *fakeAuthService) ResetPassword(ctx context.Context, actorID, targetID, 
 	return s.getMemberErr
 }
 func (s *fakeAuthService) ListRoles(ctx context.Context) ([]domainauth.Role, error) {
-	return nil, nil
+	return s.rolesResult, nil
 }
 
 func (s *fakeAuthService) RequireActiveMember(ctx context.Context, actorID string) (domainauth.Member, error) {
@@ -97,8 +102,16 @@ func newTestRouterWithAuth(svc domainauth.Service) (*security.SecureRouter, *sec
 	r := security.NewSecureRouter(http.NewServeMux(), tok)
 	h := NewAuthHandler(svc)
 	r.Public("POST /api/v1/auth/login", Handle(h.Login))
+	r.Secured("GET /api/v1/me", Handle(h.Me), security.MinRole(domainauth.RoleLevelUser))
+	r.Secured("PUT /api/v1/me/password", Handle(h.ChangePassword), security.MinRole(domainauth.RoleLevelUser))
+	r.Secured("GET /api/v1/roles", Handle(h.ListRoles), security.MinRole(domainauth.RoleLevelUser))
+	r.Secured("GET /api/v1/members", Handle(h.ListMembers), security.MinRole(domainauth.RoleLevelAdmin))
 	r.Secured("GET /api/v1/members/{id}", Handle(h.GetMember), security.MinRole(domainauth.RoleLevelUser))
 	r.Secured("POST /api/v1/members", Handle(h.CreateMember), security.MinRole(domainauth.RoleLevelAdmin))
+	r.Secured("PUT /api/v1/members/{id}/role", Handle(h.ChangeRole), security.MinRole(domainauth.RoleLevelAdmin))
+	r.Secured("PUT /api/v1/members/{id}/active", Handle(h.SetActive), security.MinRole(domainauth.RoleLevelAdmin))
+	r.Secured("PUT /api/v1/members/{id}/password", Handle(h.ResetPassword), security.MinRole(domainauth.RoleLevelAdmin))
+	r.Secured("DELETE /api/v1/members/{id}", Handle(h.DeleteMember), security.MinRole(domainauth.RoleLevelSuperAdmin))
 	return r, tok
 }
 
@@ -268,6 +281,210 @@ func TestAuthHandler_CreateMember(t *testing.T) {
 		assert.Equal(t, http.StatusConflict, w.Code)
 		assertAppErrorCode(t, w, "CONFLICT")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// ListMembers / ChangeRole / SetActive / DeleteMember / ResetPassword
+// ChangePassword / Me / ListRoles  (+ route-level RBAC)
+// ---------------------------------------------------------------------------
+
+func TestAuthHandler_ListMembers(t *testing.T) {
+	t.Run("admin success 200 propagates actor", func(t *testing.T) {
+		svc := &fakeAuthService{getMember: domainauth.Member{ID: "u1", Username: "bob", Active: true,
+			Role: domainauth.Role{ID: 1, Name: "user", Level: domainauth.RoleLevelUser}}}
+		r, tok := newTestRouterWithAuth(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/members?limit=10", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "admin1", domainauth.RoleLevelAdmin))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "admin1", svc.lastActorID)
+		var resp struct {
+			Total int              `json:"total"`
+			Items []map[string]any `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, 1, resp.Total)
+		require.Len(t, resp.Items, 1)
+		assert.Equal(t, "bob", resp.Items[0]["username"])
+	})
+
+	t.Run("user role is blocked by route gate (403)", func(t *testing.T) {
+		svc := &fakeAuthService{}
+		r, tok := newTestRouterWithAuth(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/members", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "u1", domainauth.RoleLevelUser))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("missing bearer token is 401", func(t *testing.T) {
+		svc := &fakeAuthService{}
+		r, _ := newTestRouterWithAuth(svc)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/members", nil)
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}
+
+func TestAuthHandler_ChangeRole(t *testing.T) {
+	t.Run("success 200 propagates actor from claims", func(t *testing.T) {
+		svc := &fakeAuthService{getMember: domainauth.Member{ID: "u1", Username: "bob",
+			Role: domainauth.Role{ID: 2, Name: "admin", Level: domainauth.RoleLevelAdmin}}}
+		r, tok := newTestRouterWithAuth(svc)
+
+		body, _ := json.Marshal(map[string]any{"role_id": 2})
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/members/u1/role", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "super1", domainauth.RoleLevelSuperAdmin))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "super1", svc.lastActorID)
+	})
+
+	t.Run("permission denied maps to 403", func(t *testing.T) {
+		svc := &fakeAuthService{getMemberErr: domainauth.ErrPermission}
+		r, tok := newTestRouterWithAuth(svc)
+
+		body, _ := json.Marshal(map[string]any{"role_id": 2})
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/members/u1/role", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "admin1", domainauth.RoleLevelAdmin))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assertAppErrorCode(t, w, "FORBIDDEN")
+	})
+}
+
+func TestAuthHandler_SetActive(t *testing.T) {
+	svc := &fakeAuthService{getMember: domainauth.Member{ID: "u1", Username: "bob", Active: false,
+		Role: domainauth.Role{ID: 1, Name: "user", Level: domainauth.RoleLevelUser}}}
+	r, tok := newTestRouterWithAuth(svc)
+
+	body, _ := json.Marshal(map[string]any{"active": false})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/members/u1/active", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "super1", domainauth.RoleLevelSuperAdmin))
+	w := httptest.NewRecorder()
+	r.Mux().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "super1", svc.lastActorID)
+}
+
+func TestAuthHandler_DeleteMember(t *testing.T) {
+	t.Run("super_admin success 204", func(t *testing.T) {
+		svc := &fakeAuthService{}
+		r, tok := newTestRouterWithAuth(svc)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/members/u1", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "super1", domainauth.RoleLevelSuperAdmin))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		assert.Equal(t, "super1", svc.lastActorID)
+	})
+
+	t.Run("admin lacks super_admin role, blocked by route gate (403)", func(t *testing.T) {
+		svc := &fakeAuthService{}
+		r, tok := newTestRouterWithAuth(svc)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/members/u1", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "admin1", domainauth.RoleLevelAdmin))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+}
+
+func TestAuthHandler_ResetPassword(t *testing.T) {
+	svc := &fakeAuthService{}
+	r, tok := newTestRouterWithAuth(svc)
+
+	body, _ := json.Marshal(map[string]any{"new_password": "newpassword1"})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/members/u1/password", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "admin1", domainauth.RoleLevelAdmin))
+	w := httptest.NewRecorder()
+	r.Mux().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestAuthHandler_ChangePassword(t *testing.T) {
+	t.Run("success 200", func(t *testing.T) {
+		svc := &fakeAuthService{}
+		r, tok := newTestRouterWithAuth(svc)
+
+		body, _ := json.Marshal(map[string]any{"old_password": "old", "new_password": "newpassword1"})
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/me/password", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "u1", domainauth.RoleLevelUser))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("wrong old password maps to 401", func(t *testing.T) {
+		svc := &fakeAuthService{getMemberErr: domainauth.ErrInvalidCredentials}
+		r, tok := newTestRouterWithAuth(svc)
+
+		body, _ := json.Marshal(map[string]any{"old_password": "bad", "new_password": "newpassword1"})
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/me/password", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "u1", domainauth.RoleLevelUser))
+		w := httptest.NewRecorder()
+		r.Mux().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assertAppErrorCode(t, w, "UNAUTHORIZED")
+	})
+}
+
+func TestAuthHandler_Me(t *testing.T) {
+	svc := &fakeAuthService{getMember: domainauth.Member{ID: "u1", Username: "alice", Active: true, PasswordHash: "HASH",
+		Role: domainauth.Role{ID: 1, Name: "user", Level: domainauth.RoleLevelUser}}}
+	r, tok := newTestRouterWithAuth(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "u1", domainauth.RoleLevelUser))
+	w := httptest.NewRecorder()
+	r.Mux().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "u1", svc.lastActorID)
+	assert.NotContains(t, w.Body.String(), "HASH")
+}
+
+func TestAuthHandler_ListRoles(t *testing.T) {
+	svc := &fakeAuthService{rolesResult: []domainauth.Role{
+		{ID: 1, Name: "user", Level: domainauth.RoleLevelUser},
+		{ID: 2, Name: "admin", Level: domainauth.RoleLevelAdmin},
+		{ID: 3, Name: "super_admin", Level: domainauth.RoleLevelSuperAdmin},
+	}}
+	r, tok := newTestRouterWithAuth(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/roles", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenForLevel(t, tok, "u1", domainauth.RoleLevelUser))
+	w := httptest.NewRecorder()
+	r.Mux().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Roles []map[string]any `json:"roles"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Roles, 3)
+	assert.Equal(t, "super_admin", resp.Roles[2]["name"])
 }
 
 // assertAppErrorCode decodes the AppError envelope and asserts its code.

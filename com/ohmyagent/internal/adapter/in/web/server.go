@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
@@ -47,12 +48,17 @@ func NewServer(auth domainauth.Service, providers domainllmprovider.Service, tok
 	}
 }
 
+// tmplFuncs 는 템플릿에서 쓰는 헬퍼 함수다(플래시 성공/오류 색 구분 등).
+func tmplFuncs() template.FuncMap {
+	return template.FuncMap{"contains": strings.Contains}
+}
+
 // parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다.
 func parsePages() map[string]*template.Template {
 	names := []string{"dashboard", "members", "providers", "account"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
-		out[n] = template.Must(template.ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
+		out[n] = template.Must(template.New(n).Funcs(tmplFuncs()).ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
 	}
 	return out
 }

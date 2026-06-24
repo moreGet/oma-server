@@ -177,8 +177,17 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, basePath+"/")
 		return
 	}
+	// 역할 드롭다운은 actor 가 제어 가능한(자기보다 낮은 레벨) 역할만 노출한다.
+	// 인가 규칙 CanControl(actor>target)과 UI 를 일치시켜, 할당 불가능한 역할을
+	// 골라 생성/변경이 매번 permission denied 로 실패하는 문제를 방지한다.
 	roles, _ := s.auth.ListRoles(r.Context())
-	mv := membersView{Members: toMemberViews(members), Roles: toRoleViews(roles)}
+	controllable := make([]domainauth.Role, 0, len(roles))
+	for _, role := range roles {
+		if int(role.Level) < pd.User.Level {
+			controllable = append(controllable, role)
+		}
+	}
+	mv := membersView{Members: toMemberViews(members), Roles: toRoleViews(controllable)}
 	pd.Data = mv
 	s.render(w, "members", pd)
 }

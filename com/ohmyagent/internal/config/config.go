@@ -81,6 +81,13 @@ func (c *Config) SeedsInitialAdmin() bool {
 	}
 }
 
+// ResetsDatabase 는 기동 시 DB 를 파괴적으로 초기화(drop & create)할지 판정한다.
+// 로컬 개발 편의(매 기동마다 깨끗한 스키마 + 시드 재생성)를 위해 local 에서만 true.
+// dev/docker/prod 는 데이터를 보존한다.
+func (c *Config) ResetsDatabase() bool {
+	return c.Env == "local"
+}
+
 // isProduction 은 운영 환경 여부를 반환한다(jwt_secret 필수 검증용).
 func (c *Config) isProduction() bool {
 	return c.Env == "prod"

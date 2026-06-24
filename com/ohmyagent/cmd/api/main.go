@@ -68,7 +68,13 @@ func run() error {
 
 	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer migCancel()
-	if err := dbout.RunMigrations(migCtx, cfg.Database.Driver, conn); err != nil {
+	if cfg.ResetsDatabase() {
+		// 로컬: 매 기동마다 DB 를 drop & create 하여 깨끗한 스키마 + 시드 재생성을 보장한다.
+		log.Warn("local env: resetting database (drop & recreate all tables)")
+		if err := dbout.ResetMigrations(migCtx, cfg.Database.Driver, conn); err != nil {
+			return err
+		}
+	} else if err := dbout.RunMigrations(migCtx, cfg.Database.Driver, conn); err != nil {
 		return err
 	}
 

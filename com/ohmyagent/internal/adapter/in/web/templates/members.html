@@ -1,61 +1,78 @@
 {{define "content"}}
-<h2>멤버 관리</h2>
-
 {{if .CanManageMembers}}
-<article>
-  <header>새 멤버 생성</header>
-  <form method="post" action="/admin/members">
-    <div class="grid">
-      <input type="text" name="username" placeholder="아이디" required>
-      <input type="password" name="password" placeholder="비밀번호(8자 이상)" required>
-      <select name="role_id" required>
-        {{range .Data.Roles}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
-      </select>
-      <button type="submit">생성</button>
-    </div>
-  </form>
-</article>
+<div class="card mb-4">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-person-plus me-1"></i> 새 멤버 생성</div>
+  <div class="card-body">
+    <form method="post" action="/admin/members" class="row g-3 align-items-end">
+      <div class="col-12 col-md-3">
+        <label class="form-label small text-secondary">아이디</label>
+        <input type="text" name="username" class="form-control" placeholder="username" required>
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label small text-secondary">비밀번호</label>
+        <input type="password" name="password" class="form-control" placeholder="8자 이상" minlength="8" required>
+      </div>
+      <div class="col-12 col-md-3">
+        <label class="form-label small text-secondary">역할</label>
+        <select name="role_id" class="form-select" required>
+          {{range .Data.Roles}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="col-12 col-md-3">
+        <button type="submit" class="btn btn-primary w-100"><i class="bi bi-plus-lg"></i> 생성</button>
+      </div>
+    </form>
+  </div>
+</div>
 {{end}}
 
-<figure>
-<table>
-  <thead>
-    <tr><th>아이디</th><th>역할</th><th>활성</th><th>생성일</th>{{if .CanManageMembers}}<th>작업</th>{{end}}</tr>
-  </thead>
-  <tbody>
-    {{range $m := .Data.Members}}
-    <tr>
-      <td>{{$m.Username}}</td>
-      <td><span class="badge">{{$m.Role}}</span></td>
-      <td>{{if $m.Active}}<span class="ok">●</span> 활성{{else}}<span class="off">○</span> 비활성{{end}}</td>
-      <td><small class="muted">{{$m.CreatedAt}}</small></td>
-      {{if $.CanManageMembers}}
-      <td class="actions">
-        <form method="post" action="/admin/members/{{$m.ID}}/role">
-          <select name="role_id">
-            {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
-          </select>
-          <button type="submit" class="outline">역할변경</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/active">
-          <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
-          <button type="submit" class="secondary outline">{{if $m.Active}}비활성화{{else}}활성화{{end}}</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/password">
-          <input type="password" name="new_password" placeholder="새 비밀번호" required>
-          <button type="submit" class="outline">비번리셋</button>
-        </form>
-        {{if $.CanDeleteMembers}}
-        <form method="post" action="/admin/members/{{$m.ID}}/delete" hx-confirm="정말 이 멤버를 삭제할까요?">
-          <button type="submit" class="contrast outline">삭제</button>
-        </form>
+<div class="card">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-people me-1"></i> 멤버 목록</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr><th>아이디</th><th>역할</th><th>상태</th><th>생성일</th>{{if .CanManageMembers}}<th class="text-end">작업</th>{{end}}</tr>
+      </thead>
+      <tbody>
+        {{range $m := .Data.Members}}
+        <tr>
+          <td class="fw-semibold">{{$m.Username}}</td>
+          <td><span class="badge rounded-pill badge-{{$m.Role}}">{{$m.Role}}</span></td>
+          <td>
+            {{if $m.Active}}<span class="status on"><span class="dot"></span>활성</span>
+            {{else}}<span class="status off"><span class="dot"></span>비활성</span>{{end}}
+          </td>
+          <td><small class="text-secondary">{{$m.CreatedAt}}</small></td>
+          {{if $.CanManageMembers}}
+          <td>
+            <div class="d-flex flex-wrap gap-2 justify-content-end">
+              <form method="post" action="/admin/members/{{$m.ID}}/role" class="d-flex gap-1">
+                <select name="role_id" class="form-select form-select-sm" style="width:auto">
+                  {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-light">역할변경</button>
+              </form>
+              <form method="post" action="/admin/members/{{$m.ID}}/active">
+                <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{if $m.Active}}비활성화{{else}}활성화{{end}}</button>
+              </form>
+              <form method="post" action="/admin/members/{{$m.ID}}/password" class="d-flex gap-1">
+                <input type="password" name="new_password" class="form-control form-control-sm" style="width:9rem" placeholder="새 비밀번호" required>
+                <button type="submit" class="btn btn-sm btn-outline-light">리셋</button>
+              </form>
+              {{if $.CanDeleteMembers}}
+              <form method="post" action="/admin/members/{{$m.ID}}/delete" onsubmit="return confirm('정말 이 멤버를 삭제할까요?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+              </form>
+              {{end}}
+            </div>
+          </td>
+          {{end}}
+        </tr>
         {{end}}
-      </td>
-      {{end}}
-    </tr>
-    {{end}}
-  </tbody>
-</table>
-</figure>
-<small class="muted">역할 제어: super_admin → admin·user, admin → user. 삭제는 super_admin 만 가능.</small>
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-secondary small mt-3 mb-0">역할 제어: super_admin → admin·user, admin → user. 멤버 삭제는 super_admin 만 가능합니다.</p>
 {{end}}

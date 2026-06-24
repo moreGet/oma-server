@@ -1,15 +1,14 @@
 package llm
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
@@ -18,19 +17,17 @@ import (
 var _ domainllmprovider.Adapter = (*ClaudeAdapter)(nil)
 
 const (
-	defaultAnthropicEndpoint = "https://api.anthropic.com"
-	defaultClaudeModel       = "claude-3-5-sonnet-latest"
-	defaultClaudeMaxTokens   = 1024 // Anthropic 은 max_tokens 필수 → 미지정 시 기본값
-	anthropicVersion         = "2023-06-01"
-	claudeStreamBufferMax    = 1 << 20
+	// defaultClaudeModel 은 요청·설정 모두 모델을 비웠을 때의 기본 Anthropic 모델이다.
+	defaultClaudeModel = "claude-3-5-sonnet-latest"
+	// defaultClaudeMaxTokens 는 max_tokens 미지정 시 기본값이다(Anthropic 은 max_tokens 필수).
+	defaultClaudeMaxTokens = 1024
 )
 
-// ClaudeAdapter 는 Anthropic Messages API(스트리밍, tool use) 어댑터다.
+// ClaudeAdapter 는 공식 Anthropic Go SDK 를 사용하는 Messages API(스트리밍, tool use) 어댑터다.
 type ClaudeAdapter struct {
 	endpoint  string
 	model     string
 	apiKeyEnv string
-	client    *http.Client
 }
 
 // NewClaudeAdapter 는 도메인 ProviderConfig 로부터 ClaudeAdapter 를 생성한다.
@@ -39,7 +36,6 @@ func NewClaudeAdapter(config domainllmprovider.ProviderConfig) *ClaudeAdapter {
 		endpoint:  config.Endpoint,
 		model:     config.Model,
 		apiKeyEnv: config.APIKeyEnv,
-		client:    &http.Client{},
 	}
 }
 
@@ -48,6 +44,7 @@ func (a *ClaudeAdapter) ProviderType() domainllmprovider.ProviderType {
 	return domainllmprovider.ProviderTypeExternal
 }
 
+// resolveModel 은 요청 모델 → 설정 모델 → 기본값 순으로 사용할 모델을 결정한다.
 func (a *ClaudeAdapter) resolveModel(reqModel string) string {
 	if reqModel != "" {
 		return reqModel
@@ -58,151 +55,149 @@ func (a *ClaudeAdapter) resolveModel(reqModel string) string {
 	return defaultClaudeModel
 }
 
-func (a *ClaudeAdapter) messagesURL() string {
-	ep := a.endpoint
-	if ep == "" {
-		ep = defaultAnthropicEndpoint
-	}
-	return strings.TrimRight(ep, "/") + "/v1/messages"
-}
-
-// --- Anthropic 와이어 포맷 ---
-
-type anthropicContentBlock struct {
-	Type      string          `json:"type"`                  // text | tool_use | tool_result
-	Text      string          `json:"text,omitempty"`        // text
-	ID        string          `json:"id,omitempty"`          // tool_use
-	Name      string          `json:"name,omitempty"`        // tool_use
-	Input     json.RawMessage `json:"input,omitempty"`       // tool_use
-	ToolUseID string          `json:"tool_use_id,omitempty"` // tool_result
-	Content   string          `json:"content,omitempty"`     // tool_result
-}
-
-type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"` // string 또는 []anthropicContentBlock
-}
-
-type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
-}
-
-type anthropicRequest struct {
-	Model       string             `json:"model"`
-	MaxTokens   int                `json:"max_tokens"`
-	Messages    []anthropicMessage `json:"messages"`
-	System      string             `json:"system,omitempty"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	Stream      bool               `json:"stream"`
-	Temperature *float64           `json:"temperature,omitempty"`
-}
-
-// anthropicStreamEvent 는 SSE data 라인 JSON 을 type 으로 분기 파싱하기 위한 통합 구조다.
-type anthropicStreamEvent struct {
-	Type         string `json:"type"`
-	Index        int    `json:"index"`
-	ContentBlock struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"content_block"`
-	Delta struct {
-		Type        string `json:"type"`
-		Text        string `json:"text"`
-		PartialJSON string `json:"partial_json"`
-		StopReason  string `json:"stop_reason"`
-	} `json:"delta"`
-	Message struct {
-		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	} `json:"message"`
-	Usage struct {
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-	Error struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-// splitSystem 은 system 역할 메시지를 top-level system 텍스트로 분리한다.
-func splitSystem(msgs []domainllmprovider.ChatMessage) string {
+// claudeBuildSystem 은 system 역할 메시지들을 top-level System 텍스트 블록 배열로 분리한다.
+// 여러 system 메시지는 "\n\n" 로 결합한 단일 텍스트 블록이 된다(없으면 nil).
+func claudeBuildSystem(msgs []domainllmprovider.ChatMessage) []anthropic.TextBlockParam {
 	var systems []string
 	for _, m := range msgs {
 		if m.Role == domainllmprovider.ChatRoleSystem {
 			systems = append(systems, m.Content)
 		}
 	}
-	return strings.Join(systems, "\n\n")
+	if len(systems) == 0 {
+		return nil
+	}
+	return []anthropic.TextBlockParam{{Text: strings.Join(systems, "\n\n")}}
 }
 
-// toAnthropicMessages 는 도메인 메시지를 Anthropic 메시지로 변환한다.
+// claudeBuildMessages 는 도메인 메시지를 Anthropic 메시지로 변환한다.
+//   - system 역할은 제외(top-level System 으로 분리됨).
 //   - tool 역할(결과)들은 연속 병합되어 하나의 user 메시지(tool_result 블록 배열)로,
-//   - assistant + ToolCalls 는 tool_use 블록 배열로 재구성한다(멀티턴 루프 히스토리).
-func toAnthropicMessages(msgs []domainllmprovider.ChatMessage) []anthropicMessage {
-	out := make([]anthropicMessage, 0, len(msgs))
-	var pendingToolResults []anthropicContentBlock
+//   - assistant + ToolCalls 는 (선택적 text + ) tool_use 블록 배열의 assistant 메시지로,
+//   - 그 외 plain user/assistant 는 단순 텍스트 메시지로 재구성한다(멀티턴 루프 히스토리).
+func claudeBuildMessages(msgs []domainllmprovider.ChatMessage) []anthropic.MessageParam {
+	out := make([]anthropic.MessageParam, 0, len(msgs))
+
+	var pendingToolResults []anthropic.ContentBlockParamUnion
 	flush := func() {
 		if len(pendingToolResults) > 0 {
-			out = append(out, anthropicMessage{Role: "user", Content: pendingToolResults})
+			out = append(out, anthropic.NewUserMessage(pendingToolResults...))
 			pendingToolResults = nil
 		}
 	}
+
 	for _, m := range msgs {
 		switch m.Role {
 		case domainllmprovider.ChatRoleSystem:
 			continue
 		case domainllmprovider.ChatRoleTool:
-			pendingToolResults = append(pendingToolResults, anthropicContentBlock{
-				Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content,
-			})
+			// 연속된 tool 결과를 하나의 user 메시지로 모은다.
+			pendingToolResults = append(pendingToolResults,
+				anthropic.NewToolResultBlock(m.ToolCallID, m.Content, false))
 		case domainllmprovider.ChatRoleAssistant:
 			flush()
 			if len(m.ToolCalls) > 0 {
-				blocks := make([]anthropicContentBlock, 0, len(m.ToolCalls)+1)
+				blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
 				if m.Content != "" {
-					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+					blocks = append(blocks, anthropic.NewTextBlock(m.Content))
 				}
 				for _, tc := range m.ToolCalls {
-					input := json.RawMessage(tc.Arguments)
-					if len(input) == 0 {
-						input = json.RawMessage("{}")
-					}
-					blocks = append(blocks, anthropicContentBlock{Type: "tool_use", ID: tc.ID, Name: tc.Name, Input: input})
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{
+						OfToolUse: &anthropic.ToolUseBlockParam{
+							ID:    tc.ID,
+							Name:  tc.Name,
+							Input: claudeDecodeArguments(tc.Arguments),
+						},
+					})
 				}
-				out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
+				out = append(out, anthropic.NewAssistantMessage(blocks...))
 			} else {
-				out = append(out, anthropicMessage{Role: "assistant", Content: m.Content})
+				out = append(out, anthropic.NewAssistantMessage(anthropic.NewTextBlock(m.Content)))
 			}
 		default: // user
 			flush()
-			out = append(out, anthropicMessage{Role: "user", Content: m.Content})
+			out = append(out, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
 		}
 	}
 	flush()
 	return out
 }
 
-func toAnthropicTools(tools []domainllmprovider.ToolDefinition) []anthropicTool {
+// claudeDecodeArguments 는 ToolCall.Arguments(JSON 문자열)를 tool_use input 으로 디코드한다.
+// 비었거나 파싱 실패 시 빈 객체({})를 반환한다.
+func claudeDecodeArguments(args string) any {
+	if strings.TrimSpace(args) == "" {
+		return map[string]any{}
+	}
+	var v any
+	if err := json.Unmarshal([]byte(args), &v); err != nil {
+		return map[string]any{}
+	}
+	return v
+}
+
+// claudeBuildTools 는 도메인 도구 정의를 Anthropic 도구로 변환한다.
+// Parameters(raw JSON Schema)를 InputSchema 로 그대로 전달하며, 비면 {"type":"object"} 기본값을 쓴다.
+func claudeBuildTools(tools []domainllmprovider.ToolDefinition) []anthropic.ToolUnionParam {
 	if len(tools) == 0 {
 		return nil
 	}
-	out := make([]anthropicTool, 0, len(tools))
+	out := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
-		schema := json.RawMessage(t.Parameters)
-		if len(schema) == 0 {
-			schema = json.RawMessage(`{"type":"object"}`)
+		tool := anthropic.ToolParam{
+			Name:        t.Name,
+			InputSchema: claudeToolInputSchema(t.Parameters),
 		}
-		out = append(out, anthropicTool{Name: t.Name, Description: t.Description, InputSchema: schema})
+		if t.Description != "" {
+			tool.Description = anthropic.String(t.Description)
+		}
+		out = append(out, anthropic.ToolUnionParam{OfTool: &tool})
 	}
 	return out
 }
 
-// ChatStream 은 Anthropic Messages API 를 stream=true 로 호출하고 응답 조각을 onChunk 로 전달한다.
+// claudeToolInputSchema 는 raw JSON Schema(object) 바이트를 ToolInputSchemaParam 으로 만든다.
+// 스키마의 properties/required/추가 키를 ExtraFields 로 보존한다(비면 type=object 만).
+func claudeToolInputSchema(raw []byte) anthropic.ToolInputSchemaParam {
+	schema := anthropic.ToolInputSchemaParam{}
+	if len(raw) == 0 {
+		return schema
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return schema
+	}
+	if props, ok := parsed["properties"]; ok {
+		schema.Properties = props
+	}
+	if req, ok := parsed["required"].([]any); ok {
+		required := make([]string, 0, len(req))
+		for _, r := range req {
+			if s, ok := r.(string); ok {
+				required = append(required, s)
+			}
+		}
+		schema.Required = required
+	}
+	// type/properties/required 외 추가 키(예: $defs, additionalProperties)는 ExtraFields 로 보존.
+	extra := map[string]any{}
+	for k, v := range parsed {
+		switch k {
+		case "type", "properties", "required":
+			continue
+		default:
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		schema.ExtraFields = extra
+	}
+	return schema
+}
+
+// ChatStream 은 Anthropic Messages API 를 스트리밍으로 호출하고 응답 조각을 onChunk 로 전달한다.
+// 텍스트 델타는 즉시 onChunk(Delta) 로 보내고, tool_use 블록은 누적된 최종 메시지에서 추출해
+// 마지막 Done 조각에 담는다. onChunk 가 에러를 반환하면 스트리밍을 중단하고 그 에러를 반환한다.
 func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
 	apiKey := ""
 	if a.apiKeyEnv != "" {
@@ -212,108 +207,76 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		return fmt.Errorf("claude: %w: API key not set (config api_key_env=%q)", domainllmprovider.ErrUpstream, a.apiKeyEnv)
 	}
 
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if a.endpoint != "" {
+		opts = append(opts, option.WithBaseURL(a.endpoint))
+	}
+	client := anthropic.NewClient(opts...)
+
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultClaudeMaxTokens
 	}
-	payload := anthropicRequest{
-		Model:       a.resolveModel(req.Model),
-		MaxTokens:   maxTokens,
-		Messages:    toAnthropicMessages(req.Messages),
-		System:      splitSystem(req.Messages),
-		Tools:       toAnthropicTools(req.Tools),
-		Stream:      true,
-		Temperature: req.Temperature,
+
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(a.resolveModel(req.Model)),
+		MaxTokens: int64(maxTokens),
+		Messages:  claudeBuildMessages(req.Messages),
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("claude: marshal request: %w", err)
+	if system := claudeBuildSystem(req.Messages); len(system) > 0 {
+		params.System = system
+	}
+	if tools := claudeBuildTools(req.Tools); len(tools) > 0 {
+		params.Tools = tools
+	}
+	if req.Temperature != nil {
+		params.Temperature = anthropic.Float(*req.Temperature)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.messagesURL(), bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("claude: build request: %w", err)
-	}
-	httpReq.Header.Set("x-api-key", apiKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
+	stream := client.Messages.NewStreaming(ctx, params)
 
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
+	// 누적기: 스트림 이벤트로 최종 메시지(텍스트/tool_use/stop_reason/usage)를 조립한다.
+	message := anthropic.Message{}
+	for stream.Next() {
+		event := stream.Current()
+		if err := message.Accumulate(event); err != nil {
+			return fmt.Errorf("claude: %w: accumulate stream event: %v", domainllmprovider.ErrUpstream, err)
+		}
+		// 텍스트 델타는 도착 즉시 클라이언트로 흘려보낸다.
+		if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+			if text, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok && text.Text != "" {
+				if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: text.Text}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
 		return fmt.Errorf("claude: %w: %v", domainllmprovider.ErrUpstream, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("claude: %w: status %d: %s", domainllmprovider.ErrUpstream, resp.StatusCode, strings.TrimSpace(string(snippet)))
-	}
-
-	var (
-		finishReason     string
-		promptTokens     int
-		completionTokens int
-		toolBlocks       = map[int]*toolCallBuilder{} // openai_adapter.go 정의 재사용
-	)
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), claudeStreamBufferMax)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || !strings.HasPrefix(line, "data:") {
-			continue
+	// 최종 메시지에서 tool_use 블록을 추출한다(input 은 누적된 JSON 원문).
+	var toolCalls []domainllmprovider.ToolCall
+	for _, block := range message.Content {
+		if tu, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
+			toolCalls = append(toolCalls, domainllmprovider.ToolCall{
+				ID:        tu.ID,
+				Name:      tu.Name,
+				Arguments: string(tu.Input),
+			})
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		var ev anthropicStreamEvent
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			continue
-		}
-		switch ev.Type {
-		case "message_start":
-			promptTokens = ev.Message.Usage.InputTokens
-		case "content_block_start":
-			if ev.ContentBlock.Type == "tool_use" {
-				toolBlocks[ev.Index] = &toolCallBuilder{id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
-			}
-		case "content_block_delta":
-			switch ev.Delta.Type {
-			case "text_delta":
-				if ev.Delta.Text != "" {
-					if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: ev.Delta.Text}); err != nil {
-						return err
-					}
-				}
-			case "input_json_delta":
-				if b := toolBlocks[ev.Index]; b != nil {
-					b.args.WriteString(ev.Delta.PartialJSON)
-				}
-			}
-		case "message_delta":
-			if ev.Delta.StopReason != "" {
-				finishReason = ev.Delta.StopReason
-			}
-			if ev.Usage.OutputTokens > 0 {
-				completionTokens = ev.Usage.OutputTokens
-			}
-		case "error":
-			return fmt.Errorf("claude: %w: %s", domainllmprovider.ErrUpstream, ev.Error.Message)
-		case "message_stop":
-			// 종료. 루프 후 종료 조각 전송.
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("claude: %w: read stream: %v", domainllmprovider.ErrUpstream, err)
 	}
 
 	usage := &domainllmprovider.ChatUsage{
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      promptTokens + completionTokens,
+		PromptTokens:     int(message.Usage.InputTokens),
+		CompletionTokens: int(message.Usage.OutputTokens),
+		TotalTokens:      int(message.Usage.InputTokens + message.Usage.OutputTokens),
 	}
+
 	return onChunk(domainllmprovider.ChatStreamChunk{
 		Done:         true,
-		FinishReason: finishReason,
-		ToolCalls:    buildToolCalls(toolBlocks), // openai_adapter.go 의 헬퍼 재사용
+		FinishReason: string(message.StopReason), // "end_turn" | "tool_use" | "max_tokens" 등 원문
+		ToolCalls:    toolCalls,
 		Usage:        usage,
 	})
 }

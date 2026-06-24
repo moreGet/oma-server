@@ -83,19 +83,33 @@ data: {"done":true,"finish_reason":"stop","usage":{"prompt_tokens":23,"completio
 - 외부 LLM 호출 실패 → `502 BAD_GATEWAY`
 
 ### Provider별 채팅 지원 현황
-| ProviderType / 모델 | 어댑터 | 채팅 스트리밍 |
-|---|---|---|
-| EXTERNAL (`claude`* 로 시작) | ClaudeAdapter | ✅ Anthropic Messages API `/v1/messages` (stream) |
-| EXTERNAL (그 외) | OpenAIAdapter | ✅ `/v1/chat/completions` (stream) |
-| LOCAL | OllamaAdapter | ✅ `/api/chat` (stream) |
+어댑터는 모두 **각 벤더 공식 Go SDK**를 사용한다(직접 HTTP 호출 아님).
 
-> 라우팅: EXTERNAL Provider 의 `config.model` 이 `claude` 로 시작하면 Claude, 아니면 OpenAI.
+| ProviderType / 모델 | 어댑터 | 공식 SDK | 채팅 스트리밍 |
+|---|---|---|---|
+| EXTERNAL (`claude`* 로 시작) | ClaudeAdapter | `github.com/anthropics/anthropic-sdk-go` | ✅ Messages API (stream, tool use) |
+| EXTERNAL (`gemini`* 로 시작) | GeminiAdapter | `google.golang.org/genai` | ✅ GenerateContentStream (function calling) |
+| EXTERNAL (그 외) | OpenAIAdapter | `github.com/openai/openai-go/v3` | ✅ Chat Completions (stream, function calling) |
+| LOCAL | OllamaAdapter | `github.com/ollama/ollama/api` | ✅ Chat (stream, tools) |
+
+> 라우팅: EXTERNAL Provider 의 `config.model` 접두사로 분기한다 — `claude*`→Claude, `gemini*`→Gemini, 그 외→OpenAI.
 > Claude 특이사항: `role:"system"` 메시지는 자동으로 top-level `system` 필드로 분리되며,
 > `max_tokens` 미지정 시 1024 가 기본 적용된다(Anthropic 필수 필드).
+> Gemini 특이사항: `system`→`SystemInstruction`, `assistant`→role `model`, 도구 결과는 function-response 파트로 user 턴에 실린다(전용 tool 역할 없음).
 
 ### Anthropic(Claude) 연동 준비
 1. `export ANTHROPIC_API_KEY="sk-ant-..."`
 2. Provider 생성(admin): `provider_type:"EXTERNAL"`, `config.model:"claude-3-5-sonnet-latest"`(또는 사용할 실제 모델 ID), `config.api_key_env:"ANTHROPIC_API_KEY"`, `is_active:true`
+3. `POST /api/v1/chat` 로 질의(SSE 동일 포맷).
+
+### Google(Gemini) 연동 준비
+1. `export GEMINI_API_KEY="..."` (Google AI Studio 발급 키)
+2. Provider 생성(admin): `provider_type:"EXTERNAL"`, `config.model:"gemini-1.5-flash"`(또는 `gemini-2.0-flash` 등), `config.api_key_env:"GEMINI_API_KEY"`, `is_active:true`
+3. `POST /api/v1/chat` 로 질의(SSE 동일 포맷). 모델명이 `gemini` 로 시작하므로 GeminiAdapter 로 라우팅된다.
+
+### Local(Ollama) 연동 준비
+1. 로컬에 Ollama 실행(`ollama serve`, 기본 `http://localhost:11434`) 후 모델 풀: `ollama pull llama3`
+2. Provider 생성(admin): `provider_type:"LOCAL"`, `config.model:"llama3"`, `config.endpoint:"http://localhost:11434"`(미설정 시 `OLLAMA_HOST`→기본값), `is_active:true`. **API 키 불필요.**
 3. `POST /api/v1/chat` 로 질의(SSE 동일 포맷).
 
 ### OpenAI 연동 준비
