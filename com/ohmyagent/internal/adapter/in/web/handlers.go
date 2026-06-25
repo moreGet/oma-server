@@ -28,6 +28,7 @@ type pageData struct {
 	CanDeleteMembers bool // super_admin
 	CanManage        bool // admin↑ (provider 등 쓰기)
 	Flash            string
+	FlashError       bool // true 면 오류 토스트(빨강), false 면 성공 토스트(초록)
 	Data             any
 }
 
@@ -52,6 +53,7 @@ type providerView struct {
 	Model     string
 	Endpoint  string
 	APIKeyEnv string
+	APIKeySet bool // 직접 저장된(암호화) API 키 존재 여부(마스킹 표시용)
 	MaxTokens int
 	Active    bool
 }
@@ -83,6 +85,7 @@ type providersView struct {
 func (s *Server) base(r *http.Request, w http.ResponseWriter, title, active string) pageData {
 	claims, _ := security.ClaimsFrom(r.Context())
 	lvl := int(claims.Level)
+	flash, flashErr := s.popFlash(w, r)
 	return pageData{
 		Title:            title,
 		Active:           active,
@@ -90,7 +93,8 @@ func (s *Server) base(r *http.Request, w http.ResponseWriter, title, active stri
 		CanManageMembers: claims.Level >= domainauth.RoleLevelAdmin,
 		CanDeleteMembers: claims.Level >= domainauth.RoleLevelSuperAdmin,
 		CanManage:        claims.Level >= domainauth.RoleLevelAdmin,
-		Flash:            s.popFlash(w, r),
+		Flash:            flash,
+		FlashError:       flashErr,
 	}
 }
 
@@ -178,7 +182,7 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "멤버 관리", "members")
 	members, _, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{Limit: 100})
 	if err != nil {
-		s.setFlash(w, "멤버 목록을 볼 권한이 없습니다.")
+		s.setFlashError(w, "멤버 목록을 볼 권한이 없습니다.")
 		s.redirect(w, r, basePath+"/")
 		return
 	}
@@ -206,7 +210,7 @@ func (s *Server) membersCreate(w http.ResponseWriter, r *http.Request) {
 		RoleID:   roleID,
 		ActorID:  actorID(r),
 	})
-	s.flashResult(w, err, "멤버가 생성되었습니다.")
+	s.flashResult(w, err, "멤버를 생성했습니다.")
 	s.redirect(w, r, basePath+"/members")
 }
 
@@ -218,7 +222,7 @@ func (s *Server) memberChangeRole(w http.ResponseWriter, r *http.Request) {
 		TargetID: r.PathValue("id"),
 		RoleID:   roleID,
 	})
-	s.flashResult(w, err, "역할이 변경되었습니다.")
+	s.flashResult(w, err, "역할을 변경했습니다.")
 	s.redirect(w, r, basePath+"/members")
 }
 
@@ -230,20 +234,20 @@ func (s *Server) memberToggleActive(w http.ResponseWriter, r *http.Request) {
 		TargetID: r.PathValue("id"),
 		Active:   active,
 	})
-	s.flashResult(w, err, "활성 상태가 변경되었습니다.")
+	s.flashResult(w, err, "활성 상태를 변경했습니다.")
 	s.redirect(w, r, basePath+"/members")
 }
 
 func (s *Server) memberResetPassword(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	err := s.auth.ResetPassword(r.Context(), actorID(r), r.PathValue("id"), r.FormValue("new_password"))
-	s.flashResult(w, err, "비밀번호가 리셋되었습니다.")
+	s.flashResult(w, err, "비밀번호를 초기화했습니다.")
 	s.redirect(w, r, basePath+"/members")
 }
 
 func (s *Server) memberDelete(w http.ResponseWriter, r *http.Request) {
 	err := s.auth.DeleteMember(r.Context(), actorID(r), r.PathValue("id"))
-	s.flashResult(w, err, "멤버가 삭제되었습니다.")
+	s.flashResult(w, err, "멤버를 삭제했습니다.")
 	s.redirect(w, r, basePath+"/members")
 }
 
@@ -253,7 +257,7 @@ func (s *Server) providersPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "LLM Provider", "providers")
 	providers, err := s.providers.List(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlash(w, "Provider 목록을 불러오지 못했습니다.")
+		s.setFlashError(w, "Provider 목록을 불러오지 못했습니다.")
 		s.redirect(w, r, basePath+"/")
 		return
 	}
@@ -272,11 +276,12 @@ func (s *Server) providerCreate(w http.ResponseWriter, r *http.Request) {
 			Model:     r.FormValue("model"),
 			Endpoint:  r.FormValue("endpoint"),
 			APIKeyEnv: r.FormValue("api_key_env"),
+			APIKey:    r.FormValue("api_key"), // 평문 입력 → 유스케이스가 암호화 저장
 			MaxTokens: maxTokens,
 		},
 		ActorID: actorID(r),
 	})
-	s.flashResult(w, err, "Provider 가 생성되었습니다.")
+	s.flashResult(w, err, "Provider를 등록했습니다.")
 	s.redirect(w, r, basePath+"/providers")
 }
 
@@ -289,17 +294,18 @@ func (s *Server) providerUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			Model:     r.FormValue("model"),
 			Endpoint:  r.FormValue("endpoint"),
 			APIKeyEnv: r.FormValue("api_key_env"),
+			APIKey:    r.FormValue("api_key"), // 평문 입력 → 유스케이스가 암호화 저장
 			MaxTokens: maxTokens,
 		},
 		ActorID: actorID(r),
 	})
-	s.flashResult(w, err, "Provider 설정이 갱신되었습니다.")
+	s.flashResult(w, err, "Provider 설정을 저장했습니다.")
 	s.redirect(w, r, basePath+"/providers")
 }
 
 func (s *Server) providerActivate(w http.ResponseWriter, r *http.Request) {
 	err := s.providers.Activate(r.Context(), domainllmprovider.ActivateCommand{ID: r.PathValue("id"), ActorID: actorID(r)})
-	s.flashResult(w, err, "활성 Provider 가 변경되었습니다.")
+	s.flashResult(w, err, "활성 Provider를 변경했습니다.")
 	s.redirect(w, r, basePath+"/providers")
 }
 
@@ -311,16 +317,16 @@ func (s *Server) providerTest(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, domainllmprovider.ErrUpstream) {
 			msg = err.Error()
 		}
-		s.setFlash(w, "연결 테스트 실패: "+msg)
+		s.setFlashError(w, "연결 테스트 실패: "+msg)
 	} else {
-		s.setFlash(w, "연결 테스트 성공 ✓")
+		s.setFlash(w, "연결 테스트에 성공했습니다.")
 	}
 	s.redirect(w, r, basePath+"/providers")
 }
 
 func (s *Server) providerDelete(w http.ResponseWriter, r *http.Request) {
 	err := s.providers.Delete(r.Context(), domainllmprovider.DeleteCommand{ID: r.PathValue("id"), ActorID: actorID(r)})
-	s.flashResult(w, err, "Provider 가 삭제되었습니다.")
+	s.flashResult(w, err, "Provider를 삭제했습니다.")
 	s.redirect(w, r, basePath+"/providers")
 }
 
@@ -334,7 +340,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) accountChangePassword(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	err := s.auth.ChangePassword(r.Context(), actorID(r), r.FormValue("old_password"), r.FormValue("new_password"))
-	s.flashResult(w, err, "비밀번호가 변경되었습니다.")
+	s.flashResult(w, err, "비밀번호를 변경했습니다.")
 	s.redirect(w, r, basePath+"/account")
 }
 
@@ -344,7 +350,7 @@ func (s *Server) accountChangePassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) flashResult(w http.ResponseWriter, err error, okMsg string) {
 	if err != nil {
 		slog.Warn("admin action failed", "event", "admin.action", "error", err)
-		s.setFlash(w, webErrorMessage(err))
+		s.setFlashError(w, webErrorMessage(err))
 		return
 	}
 	s.setFlash(w, okMsg)
@@ -400,7 +406,8 @@ func toProviderViews(ps []domainllmprovider.LLMProvider) []providerView {
 	for _, p := range ps {
 		out = append(out, providerView{
 			ID: p.ID, Name: p.Name, Type: string(p.ProviderType), Model: p.Config.Model,
-			Endpoint: p.Config.Endpoint, APIKeyEnv: p.Config.APIKeyEnv, MaxTokens: p.Config.MaxTokens, Active: p.IsActive,
+			Endpoint: p.Config.Endpoint, APIKeyEnv: p.Config.APIKeyEnv, APIKeySet: p.Config.APIKey != "",
+			MaxTokens: p.Config.MaxTokens, Active: p.IsActive,
 		})
 	}
 	return out

@@ -3,10 +3,23 @@ package llm
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
+
+// resolveAPIKey 는 어댑터의 API 키를 해석한다.
+// 직접 저장된 키(apiKey, 유스케이스가 복호화한 평문)를 우선하고, 없으면 환경변수(apiKeyEnv)에서 읽는다.
+func resolveAPIKey(apiKey, apiKeyEnv string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	if apiKeyEnv != "" {
+		return os.Getenv(apiKeyEnv)
+	}
+	return ""
+}
 
 // EXTERNAL Provider 를 모델명 접두사로 어댑터에 분기한다.
 //   - claude* → ClaudeAdapter (Anthropic, 예: claude-3-5-sonnet-latest)

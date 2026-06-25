@@ -4,10 +4,10 @@ package web
 
 import (
 	"embed"
+	"encoding/base64"
 	"html/template"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
@@ -50,17 +50,12 @@ func NewServer(auth domainauth.Service, providers domainllmprovider.Service, tok
 	}
 }
 
-// tmplFuncs 는 템플릿에서 쓰는 헬퍼 함수다(플래시 성공/오류 색 구분 등).
-func tmplFuncs() template.FuncMap {
-	return template.FuncMap{"contains": strings.Contains}
-}
-
 // parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다.
 func parsePages() map[string]*template.Template {
 	names := []string{"dashboard", "members", "providers", "account"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
-		out[n] = template.Must(template.New(n).Funcs(tmplFuncs()).ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
+		out[n] = template.Must(template.ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
 	}
 	return out
 }
@@ -125,17 +120,31 @@ func (s *Server) clearSession(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 
-func (s *Server) setFlash(w http.ResponseWriter, msg string) {
-	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: msg, Path: basePath, MaxAge: flashTTLSeconds, SameSite: http.SameSiteLaxMode})
+// setFlash 는 성공 플래시 메시지를 설정한다.
+func (s *Server) setFlash(w http.ResponseWriter, msg string) { s.writeFlash(w, 'S', msg) }
+
+// setFlashError 는 오류 플래시 메시지를 설정한다(토스트가 빨간색으로 표시).
+func (s *Server) setFlashError(w http.ResponseWriter, msg string) { s.writeFlash(w, 'E', msg) }
+
+// writeFlash 는 [레벨바이트 + 메시지]를 base64 로 인코딩해 쿠키에 담는다.
+// 한글 등 비ASCII 가 쿠키 값에서 잘리지 않도록(net/http 의 쿠키 sanitizer 회피) base64 를 쓴다.
+func (s *Server) writeFlash(w http.ResponseWriter, kind byte, msg string) {
+	enc := base64.StdEncoding.EncodeToString(append([]byte{kind}, msg...))
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: enc, Path: basePath, MaxAge: flashTTLSeconds, SameSite: http.SameSiteLaxMode})
 }
 
-func (s *Server) popFlash(w http.ResponseWriter, r *http.Request) string {
+// popFlash 는 플래시 메시지와 오류 여부를 읽고 쿠키를 제거한다(1회성).
+func (s *Server) popFlash(w http.ResponseWriter, r *http.Request) (string, bool) {
 	c, err := r.Cookie(flashCookie)
 	if err != nil || c.Value == "" {
-		return ""
+		return "", false
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: basePath, MaxAge: -1})
-	return c.Value
+	raw, decErr := base64.StdEncoding.DecodeString(c.Value)
+	if decErr != nil || len(raw) == 0 {
+		return "", false
+	}
+	return string(raw[1:]), raw[0] == 'E'
 }
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request, to string) {

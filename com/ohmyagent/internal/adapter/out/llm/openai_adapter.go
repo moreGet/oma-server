@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -29,6 +28,7 @@ const (
 type OpenAIAdapter struct {
 	endpoint  string // 빈 문자열이면 SDK 기본(api.openai.com) 사용
 	model     string
+	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
 	apiKeyEnv string
 }
 
@@ -38,6 +38,7 @@ func NewOpenAIAdapter(config domainllmprovider.ProviderConfig) *OpenAIAdapter {
 	return &OpenAIAdapter{
 		endpoint:  config.Endpoint,
 		model:     config.Model,
+		apiKey:    config.APIKey,
 		apiKeyEnv: config.APIKeyEnv,
 	}
 }
@@ -188,12 +189,9 @@ func collectOpenAIToolCalls(m map[int64]*openAIToolCallAccumulator) []domainllmp
 // 도구가 있으면 function-calling 으로 넘기고, 스트리밍으로 오는 tool_call 조각을 누적해
 // 마지막 Done 조각에 담는다. onChunk 가 에러를 반환하면 스트리밍을 중단하고 그 에러를 반환한다.
 func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := ""
-	if a.apiKeyEnv != "" {
-		apiKey = os.Getenv(a.apiKeyEnv)
-	}
-	if a.apiKeyEnv == "" || apiKey == "" {
-		return fmt.Errorf("openai: %w: API key not set (config api_key_env=%q)", domainllmprovider.ErrUpstream, a.apiKeyEnv)
+	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
+	if apiKey == "" {
+		return fmt.Errorf("openai: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
 	}
 
 	client := a.newClient(apiKey)

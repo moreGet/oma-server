@@ -37,6 +37,12 @@ type Factory interface {
 	CreateAdapter(p LLMProvider) (Adapter, error)
 }
 
+// Cipher — out 포트(시크릿 대칭키 암복호화). Provider API 키를 DB 에 암호화 저장할 때 사용한다.
+type Cipher interface {
+	Encrypt(plaintext string) (string, error)
+	Decrypt(ciphertext string) (string, error)
+}
+
 // Adapter — out 포트(LLM 벤더 한 인스턴스).
 // ChatStream 은 onChunk 콜백으로 응답 조각을 순차 전달하며, 마지막에 Done=true 조각을 1회 보낸다.
 // onChunk 가 에러를 반환하면(예: 클라이언트 연결 종료) 스트리밍을 중단하고 그 에러를 반환한다.

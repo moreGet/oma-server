@@ -143,6 +143,15 @@ func (f *fakeFactory) CreateAdapter(p domainllmprovider.LLMProvider) (domainllmp
 	return &fakeAdapter{pt: p.ProviderType}, nil
 }
 
+// noopCipher implements domainllmprovider.Cipher as identity (test only):
+// Encrypt/Decrypt return the input unchanged so round-trips are predictable.
+type noopCipher struct{}
+
+var _ domainllmprovider.Cipher = (*noopCipher)(nil)
+
+func (noopCipher) Encrypt(s string) (string, error) { return s, nil }
+func (noopCipher) Decrypt(s string) (string, error) { return s, nil }
+
 // fakeGate implements the unexported accessGate.
 type fakeGate struct{ err error }
 
@@ -160,7 +169,7 @@ func TestProviderService_Create(t *testing.T) {
 	t.Run("gate denial blocks create", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{err: errDenied})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{err: errDenied})
 
 		_, err := svc.Create(ctx, domainllmprovider.CreateCommand{
 			Name: "ollama", ProviderType: domainllmprovider.ProviderTypeLocal, ActorID: "a",
@@ -171,7 +180,7 @@ func TestProviderService_Create(t *testing.T) {
 
 	t.Run("validation runs before gate", func(t *testing.T) {
 		repo := newFakeRepo()
-		svc := NewProviderService(repo, &fakeCache{}, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, &fakeCache{}, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		_, err := svc.Create(ctx, domainllmprovider.CreateCommand{Name: "", ProviderType: domainllmprovider.ProviderTypeLocal, ActorID: "a"})
 		var ve *domainllmprovider.ErrValidation
@@ -182,7 +191,7 @@ func TestProviderService_Create(t *testing.T) {
 	t.Run("success fills uuid, timestamps, audit fields", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		p, err := svc.Create(ctx, domainllmprovider.CreateCommand{
 			Name: "ollama", ProviderType: domainllmprovider.ProviderTypeLocal, IsActive: false, ActorID: "admin1",
@@ -202,7 +211,7 @@ func TestProviderService_Create(t *testing.T) {
 	t.Run("active create invalidates cache", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		_, err := svc.Create(ctx, domainllmprovider.CreateCommand{
 			Name: "ollama", ProviderType: domainllmprovider.ProviderTypeLocal, IsActive: true, ActorID: "admin1",
@@ -222,7 +231,7 @@ func TestProviderService_UpdateConfig(t *testing.T) {
 	t.Run("gate denial blocks update", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{err: errDenied})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{err: errDenied})
 
 		_, err := svc.UpdateConfig(ctx, domainllmprovider.UpdateConfigCommand{ID: "p1", ActorID: "a"})
 		assert.ErrorIs(t, err, errDenied)
@@ -234,7 +243,7 @@ func TestProviderService_UpdateConfig(t *testing.T) {
 		repo := newFakeRepo()
 		repo.byID["p1"] = domainllmprovider.LLMProvider{ID: "p1", Name: "x"}
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		p, err := svc.UpdateConfig(ctx, domainllmprovider.UpdateConfigCommand{
 			ID:      "p1",
@@ -259,7 +268,7 @@ func TestProviderService_Activate(t *testing.T) {
 	t.Run("gate denial blocks activate", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{err: errDenied})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{err: errDenied})
 
 		err := svc.Activate(ctx, domainllmprovider.ActivateCommand{ID: "p1", ActorID: "a"})
 		assert.ErrorIs(t, err, errDenied)
@@ -270,7 +279,7 @@ func TestProviderService_Activate(t *testing.T) {
 	t.Run("success invalidates cache", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		err := svc.Activate(ctx, domainllmprovider.ActivateCommand{ID: "p1", ActorID: "admin1"})
 		require.NoError(t, err)
@@ -282,7 +291,7 @@ func TestProviderService_Activate(t *testing.T) {
 		repo := newFakeRepo()
 		repo.activateErr = domainllmprovider.ErrNotFound
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		err := svc.Activate(ctx, domainllmprovider.ActivateCommand{ID: "p1", ActorID: "admin1"})
 		assert.ErrorIs(t, err, domainllmprovider.ErrNotFound)
@@ -296,7 +305,7 @@ func TestProviderService_Delete(t *testing.T) {
 	t.Run("gate denial blocks delete", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{err: errDenied})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{err: errDenied})
 
 		err := svc.Delete(ctx, domainllmprovider.DeleteCommand{ID: "p1", ActorID: "a"})
 		assert.ErrorIs(t, err, errDenied)
@@ -307,7 +316,7 @@ func TestProviderService_Delete(t *testing.T) {
 	t.Run("success invalidates cache", func(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{}
-		svc := NewProviderService(repo, cache, &fakeFactory{}, &fakeGate{})
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
 
 		err := svc.Delete(ctx, domainllmprovider.DeleteCommand{ID: "p1", ActorID: "admin1"})
 		require.NoError(t, err)
@@ -327,7 +336,7 @@ func TestProviderService_GetActiveAdapter(t *testing.T) {
 		repo := newFakeRepo()
 		cache := &fakeCache{entry: domainllmprovider.LLMProvider{ID: "p1", ProviderType: domainllmprovider.ProviderTypeLocal}, present: true}
 		factory := &fakeFactory{}
-		svc := NewProviderService(repo, cache, factory, &fakeGate{})
+		svc := NewProviderService(repo, cache, factory, &noopCipher{}, &fakeGate{})
 
 		ad, err := svc.GetActiveAdapter(ctx)
 		require.NoError(t, err)
@@ -343,7 +352,7 @@ func TestProviderService_GetActiveAdapter(t *testing.T) {
 		repo.active = domainllmprovider.LLMProvider{ID: "p2", ProviderType: domainllmprovider.ProviderTypeExternal}
 		cache := &fakeCache{present: false}
 		factory := &fakeFactory{}
-		svc := NewProviderService(repo, cache, factory, &fakeGate{})
+		svc := NewProviderService(repo, cache, factory, &noopCipher{}, &fakeGate{})
 
 		ad, err := svc.GetActiveAdapter(ctx)
 		require.NoError(t, err)
@@ -360,7 +369,7 @@ func TestProviderService_GetActiveAdapter(t *testing.T) {
 		repo.activeErr = domainllmprovider.ErrNoActiveProvider
 		cache := &fakeCache{present: false}
 		factory := &fakeFactory{}
-		svc := NewProviderService(repo, cache, factory, &fakeGate{})
+		svc := NewProviderService(repo, cache, factory, &noopCipher{}, &fakeGate{})
 
 		_, err := svc.GetActiveAdapter(ctx)
 		assert.ErrorIs(t, err, domainllmprovider.ErrNoActiveProvider)

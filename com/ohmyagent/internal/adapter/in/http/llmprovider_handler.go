@@ -137,9 +137,13 @@ func (h *ProviderHandler) Test(w http.ResponseWriter, r *http.Request) error {
 // ---------------------------------------------------------------------------
 
 type providerConfigDTO struct {
-	Endpoint    string         `json:"endpoint,omitempty"`
-	Model       string         `json:"model,omitempty"`
-	APIKeyEnv   string         `json:"api_key_env,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Model     string `json:"model,omitempty"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// APIKey 는 입력 전용(평문). 서버가 암호화해 저장하며 응답에는 절대 포함하지 않는다.
+	APIKey string `json:"api_key,omitempty"`
+	// APIKeySet 은 출력 전용: 직접 저장된(암호화된) API 키 존재 여부(마스킹).
+	APIKeySet   bool           `json:"api_key_set"`
 	MaxTokens   int            `json:"max_tokens,omitempty"`
 	ExtraParams map[string]any `json:"extra_params,omitempty"`
 }
@@ -178,9 +182,11 @@ func toProviderResp(p domainllmprovider.LLMProvider) providerResp {
 		IsActive:     p.IsActive,
 		ProviderType: string(p.ProviderType),
 		Config: providerConfigDTO{
-			Endpoint:    p.Config.Endpoint,
-			Model:       p.Config.Model,
-			APIKeyEnv:   p.Config.APIKeyEnv,
+			Endpoint:  p.Config.Endpoint,
+			Model:     p.Config.Model,
+			APIKeyEnv: p.Config.APIKeyEnv,
+			// 직접 저장된 키는 마스킹: 존재 여부만 노출하고 값(암호문/평문)은 절대 반환하지 않는다.
+			APIKeySet:   p.Config.APIKey != "",
 			MaxTokens:   p.Config.MaxTokens,
 			ExtraParams: p.Config.ExtraParams,
 		},
@@ -196,6 +202,7 @@ func fromConfigDTO(c providerConfigDTO) domainllmprovider.ProviderConfig {
 		Endpoint:    c.Endpoint,
 		Model:       c.Model,
 		APIKeyEnv:   c.APIKeyEnv,
+		APIKey:      c.APIKey, // 평문 입력 → 유스케이스가 암호화
 		MaxTokens:   c.MaxTokens,
 		ExtraParams: c.ExtraParams,
 	}

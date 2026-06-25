@@ -6,7 +6,7 @@ security:
   allowed_origins: [ ] # 비면 CORS 비활성(로컬)
 database:
   driver: "sqlite"
-  dsn: "file:aiagent.db?_pragma=busy_timeout(5000)"
+  dsn: "file:~/aiagent.db?_pragma=busy_timeout(5000)"  # 홈 경로(리눅스 fs). /mnt/c 의 sqlite I/O 이슈 회피. ~ 는 config 로더가 홈으로 확장
   max_open_conns: 1 # sqlite 단일 writer
 auth:
   jwt_secret: "" # 하드코딩 금지, env(APP_AUTH_JWT_SECRET) 주입

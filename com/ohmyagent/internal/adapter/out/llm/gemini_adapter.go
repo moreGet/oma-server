@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -28,6 +27,7 @@ const (
 type GeminiAdapter struct {
 	endpoint  string // 현재 Gemini Developer 백엔드에서는 사용하지 않음(미래 확장/문서화 목적 보존)
 	model     string
+	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
 	apiKeyEnv string
 }
 
@@ -37,6 +37,7 @@ func NewGeminiAdapter(config domainllmprovider.ProviderConfig) *GeminiAdapter {
 	return &GeminiAdapter{
 		endpoint:  config.Endpoint,
 		model:     config.Model,
+		apiKey:    config.APIKey,
 		apiKeyEnv: config.APIKeyEnv,
 	}
 }
@@ -62,12 +63,9 @@ func (a *GeminiAdapter) resolveGeminiModel(reqModel string) string {
 //
 // onChunk 가 에러를 반환하면 즉시 스트리밍을 중단하고 그 에러를 그대로 반환한다(마지막 Done 조각도 보내지 않음).
 func (a *GeminiAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := ""
-	if a.apiKeyEnv != "" {
-		apiKey = os.Getenv(a.apiKeyEnv)
-	}
+	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
 	if apiKey == "" {
-		return fmt.Errorf("gemini: %w: API key not set (config api_key_env=%q)", domainllmprovider.ErrUpstream, a.apiKeyEnv)
+		return fmt.Errorf("gemini: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{

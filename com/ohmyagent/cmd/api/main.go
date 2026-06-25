@@ -21,6 +21,7 @@ import (
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	"aiagent/com/ohmyagent/internal/adapter/in/web"
 	authout "aiagent/com/ohmyagent/internal/adapter/out/auth"
+	cryptoout "aiagent/com/ohmyagent/internal/adapter/out/crypto"
 	dbout "aiagent/com/ohmyagent/internal/adapter/out/db"
 	llmout "aiagent/com/ohmyagent/internal/adapter/out/llm"
 	agentapp "aiagent/com/ohmyagent/internal/application/agent"
@@ -91,10 +92,11 @@ func run() error {
 	tokenSvc := security.NewJWTTokenService(cfg.Auth.JWTSecret, cfg.Auth.JWTExpiry.Std())
 	providerCache := llmout.NewCache()
 	providerFactory := llmout.NewFactory()
+	providerCipher := cryptoout.NewAESGCMCipher(cfg.Security.EncryptionSecret) // API 키 암복호화(AES-GCM)
 
 	// 4) 유스케이스(auth → provider 에 accessGate 주입)
 	authUC := authapp.NewAuthUseCase(memberRepo, roleRepo, hasher, tokenSvc)
-	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, authUC)
+	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
 	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
 	agentUC := agentapp.NewAgentService(providerUC) // 에이전트 루프(tools/function-calling) 중계
 	sessionUC := chatsessionapp.NewSessionService(sessionRepo)

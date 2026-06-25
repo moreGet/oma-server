@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -27,6 +26,7 @@ const (
 type ClaudeAdapter struct {
 	endpoint  string
 	model     string
+	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
 	apiKeyEnv string
 }
 
@@ -35,6 +35,7 @@ func NewClaudeAdapter(config domainllmprovider.ProviderConfig) *ClaudeAdapter {
 	return &ClaudeAdapter{
 		endpoint:  config.Endpoint,
 		model:     config.Model,
+		apiKey:    config.APIKey,
 		apiKeyEnv: config.APIKeyEnv,
 	}
 }
@@ -199,12 +200,9 @@ func claudeToolInputSchema(raw []byte) anthropic.ToolInputSchemaParam {
 // 텍스트 델타는 즉시 onChunk(Delta) 로 보내고, tool_use 블록은 누적된 최종 메시지에서 추출해
 // 마지막 Done 조각에 담는다. onChunk 가 에러를 반환하면 스트리밍을 중단하고 그 에러를 반환한다.
 func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := ""
-	if a.apiKeyEnv != "" {
-		apiKey = os.Getenv(a.apiKeyEnv)
-	}
+	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
 	if apiKey == "" {
-		return fmt.Errorf("claude: %w: API key not set (config api_key_env=%q)", domainllmprovider.ErrUpstream, a.apiKeyEnv)
+		return fmt.Errorf("claude: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
 	}
 
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}

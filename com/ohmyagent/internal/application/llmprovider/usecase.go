@@ -4,6 +4,7 @@ package llmproviderapp
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -26,6 +27,7 @@ type ProviderService struct {
 	repo    domainllmprovider.Repository
 	cache   domainllmprovider.Cache
 	factory domainllmprovider.Factory
+	cipher  domainllmprovider.Cipher
 	gate    accessGate
 }
 
@@ -34,9 +36,35 @@ func NewProviderService(
 	repo domainllmprovider.Repository,
 	cache domainllmprovider.Cache,
 	factory domainllmprovider.Factory,
+	cipher domainllmprovider.Cipher,
 	gate accessGate,
 ) *ProviderService {
-	return &ProviderService{repo: repo, cache: cache, factory: factory, gate: gate}
+	return &ProviderService{repo: repo, cache: cache, factory: factory, cipher: cipher, gate: gate}
+}
+
+// encryptKey 는 평문 API 키를 암호화한다. 빈 값은 그대로 둔다.
+// 암호화 비활성(시크릿 미설정) 시 사용자 친화 검증 에러를 반환한다.
+func (s *ProviderService) encryptKey(plain string) (string, error) {
+	if plain == "" {
+		return "", nil
+	}
+	enc, err := s.cipher.Encrypt(plain)
+	if err != nil {
+		return "", &domainllmprovider.ErrValidation{Msg: "API 키를 DB 에 저장하려면 APP_ENCRYPTION_SECRET 설정이 필요합니다(또는 api_key_env 로 환경변수명만 등록하세요)"}
+	}
+	return enc, nil
+}
+
+// buildAdapter 는 저장된 암호문 API 키를 복호화한 뒤 어댑터를 생성한다.
+func (s *ProviderService) buildAdapter(p domainllmprovider.LLMProvider) (domainllmprovider.Adapter, error) {
+	if p.Config.APIKey != "" {
+		plain, err := s.cipher.Decrypt(p.Config.APIKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt provider api key: %w", err)
+		}
+		p.Config.APIKey = plain
+	}
+	return s.factory.CreateAdapter(p)
 }
 
 func (s *ProviderService) now() time.Time { return time.Now().UTC().Truncate(time.Second) }
@@ -59,6 +87,12 @@ func (s *ProviderService) Create(ctx context.Context, cmd domainllmprovider.Crea
 	if err := s.gate.RequireAdmin(ctx, cmd.ActorID); err != nil {
 		return domainllmprovider.LLMProvider{}, err
 	}
+	// 직접 입력한 API 키는 암호화하여 저장한다(평문 저장 금지).
+	enc, err := s.encryptKey(cmd.Config.APIKey)
+	if err != nil {
+		return domainllmprovider.LLMProvider{}, err
+	}
+	cmd.Config.APIKey = enc
 	now := s.now()
 	p := domainllmprovider.LLMProvider{
 		ID:           uuid.NewString(),
@@ -90,6 +124,20 @@ func (s *ProviderService) UpdateConfig(ctx context.Context, cmd domainllmprovide
 	}
 	if err := s.gate.RequireAdmin(ctx, cmd.ActorID); err != nil {
 		return domainllmprovider.LLMProvider{}, err
+	}
+	existing, err := s.repo.FindByID(ctx, cmd.ID)
+	if err != nil {
+		return domainllmprovider.LLMProvider{}, err
+	}
+	if cmd.Config.APIKey == "" {
+		// 키를 다시 입력하지 않으면 기존 암호문을 보존(설정 수정 시 키 유실 방지).
+		cmd.Config.APIKey = existing.Config.APIKey
+	} else {
+		enc, encErr := s.encryptKey(cmd.Config.APIKey)
+		if encErr != nil {
+			return domainllmprovider.LLMProvider{}, encErr
+		}
+		cmd.Config.APIKey = enc
 	}
 	updatedAt := s.now().Unix()
 	if err := s.repo.UpdateConfig(ctx, cmd.ID, cmd.Config, updatedAt, cmd.ActorID); err != nil {
@@ -140,7 +188,7 @@ func (s *ProviderService) TestConnection(ctx context.Context, actorID, id string
 	if err != nil {
 		return err
 	}
-	adapter, err := s.factory.CreateAdapter(p)
+	adapter, err := s.buildAdapter(p)
 	if err != nil {
 		return err
 	}
@@ -171,5 +219,5 @@ func (s *ProviderService) GetActiveAdapter(ctx context.Context) (domainllmprovid
 		s.cache.Set(p)
 		provider = p
 	}
-	return s.factory.CreateAdapter(provider)
+	return s.buildAdapter(provider)
 }

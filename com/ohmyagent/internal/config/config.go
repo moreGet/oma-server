@@ -50,6 +50,9 @@ type ServerConfig struct {
 // SecurityConfig 는 CORS 등 보안 관련 설정이다.
 type SecurityConfig struct {
 	AllowedOrigins []string `yaml:"allowed_origins"`
+	// EncryptionSecret 는 Provider API 키 등 시크릿의 AES-GCM 암호화 키 소스다.
+	// 코드 기본값 금지: yaml(security.encryption_secret) 또는 env(APP_ENCRYPTION_SECRET)로만 주입.
+	EncryptionSecret string `yaml:"encryption_secret"`
 }
 
 // DatabaseConfig 는 DB 연결 설정이다.
@@ -110,11 +113,30 @@ func Load() (*Config, error) {
 	cfg.Env = env
 
 	cfg.injectSecrets()
+	cfg.Database.DSN = expandHomePath(cfg.Database.DSN)
 
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("config: validate: %w", err)
 	}
 	return cfg, nil
+}
+
+// expandHomePath 는 DSN 의 선두 `~/`(또는 `file:~/`)를 사용자 홈 디렉터리로 확장한다.
+// sqlite 로컬 DSN 을 홈 경로(리눅스 fs)에 두어 /mnt/c(Windows 마운트)의 sqlite I/O 이슈를 피하기 위함이다.
+// 홈을 알 수 없으면 원본을 그대로 반환한다.
+func expandHomePath(dsn string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return dsn
+	}
+	switch {
+	case strings.HasPrefix(dsn, "file:~/"):
+		return "file:" + home + "/" + strings.TrimPrefix(dsn, "file:~/")
+	case strings.HasPrefix(dsn, "~/"):
+		return home + "/" + strings.TrimPrefix(dsn, "~/")
+	default:
+		return dsn
+	}
 }
 
 // loadFile 은 YAML 파일을 디코드한다.
@@ -146,6 +168,9 @@ func (c *Config) injectSecrets() {
 	}
 	if v := os.Getenv("APP_AUTH_SEED_ADMIN_PASSWORD"); v != "" {
 		c.Auth.SeedAdminPassword = v
+	}
+	if v := strings.TrimSpace(os.Getenv("APP_ENCRYPTION_SECRET")); v != "" {
+		c.Security.EncryptionSecret = v
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_DB_RESET"))) {
 	case "1", "true", "yes", "on":

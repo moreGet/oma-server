@@ -33,9 +33,12 @@ const (
 // ProviderConfig 는 config_json 컬럼에 저장되는 가변 설정의 도메인 표현이다(기존 JSON 태그 보존).
 // 시크릿(API 키)은 직접 저장하지 않고, APIKeyEnv 에 환경변수 이름만 저장한다.
 type ProviderConfig struct {
-	Endpoint    string         `json:"endpoint,omitempty"`
-	Model       string         `json:"model,omitempty"`
-	APIKeyEnv   string         `json:"api_key_env,omitempty"` // 환경변수명만 저장(보안)
+	Endpoint  string `json:"endpoint,omitempty"`
+	Model     string `json:"model,omitempty"`
+	APIKeyEnv string `json:"api_key_env,omitempty"` // 환경변수명만 저장(시크릿 아님)
+	// APIKey 는 DB(config_json)에 **AES-GCM 암호문**으로 저장된다. 어댑터에 전달될 때만
+	// 유스케이스가 복호화한 평문으로 채운다. 응답 DTO 에는 절대 노출하지 않는다(마스킹).
+	APIKey      string         `json:"api_key,omitempty"`
 	MaxTokens   int            `json:"max_tokens,omitempty"`
 	ExtraParams map[string]any `json:"extra_params,omitempty"`
 }
@@ -178,6 +181,7 @@ func (c *ProviderConfig) Normalize() {
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
 	c.Model = strings.TrimSpace(c.Model)
 	c.APIKeyEnv = strings.TrimSpace(c.APIKeyEnv)
+	c.APIKey = strings.TrimSpace(c.APIKey)
 }
 
 // Validate 는 ProviderConfig 의 형식·보안 제약을 검증한다.

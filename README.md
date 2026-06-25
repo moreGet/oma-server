@@ -91,6 +91,7 @@ APP_ENV=local go run ./com/ohmyagent/cmd/api
 | `APP_DATABASE_DSN` | DB DSN 오버라이드 |
 | `APP_AUTH_SEED_ADMIN_PASSWORD` | 시드 admin 비밀번호 |
 | `APP_DB_RESET` | `1`/`true`/`yes`/`on`이면 기동 시 **DB 전체 drop & 재생성**(데이터 삭제). 기본 off. **운영(prod)에서는 무시** |
+| `APP_ENCRYPTION_SECRET` | Provider API 키를 DB에 **직접 저장**할 때 AES-GCM 암호화 키 소스. 미설정 시 직접 저장 불가(환경변수명 방식만 가능). yaml `security.encryption_secret`로도 주입 가능 |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | 각 LLM Provider API 키(Provider의 `api_key_env`에 변수명만 등록) |
 | `OLLAMA_HOST` | Ollama 엔드포인트(미설정 시 `http://localhost:11434`) |
 

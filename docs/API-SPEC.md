@@ -35,7 +35,9 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 | `PUT /api/v1/llm-providers/{id}/activate` | admin |
 | `DELETE /api/v1/llm-providers/{id}` | admin |
 
-Provider `config` 필드: `endpoint`, `model`, `api_key_env`(시크릿 환경변수 **이름**만 저장), `max_tokens`, `extra_params`.
+Provider `config` 필드: `endpoint`, `model`, `max_tokens`, `extra_params`, 그리고 API 키는 **둘 중 하나**:
+- `api_key_env`: 시크릿 환경변수 **이름**만 저장(예: `OPENAI_API_KEY`). 환경변수 이름 형식만 허용(키 값 직접 입력 시 400).
+- `api_key`: 키 값 **직접 등록**(입력 전용 평문). 서버가 **AES-GCM 암호화**하여 DB 저장하며(`APP_ENCRYPTION_SECRET` 필요, 미설정 시 400), **응답에는 절대 노출하지 않고** `api_key_set: true/false`(마스킹)로만 표시. 설정 수정 시 `api_key`를 비우면 기존 키를 보존.
 
 ---
 
