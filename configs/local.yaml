@@ -4,6 +4,7 @@ server:
   write_timeout: "10s"
 security:
   allowed_origins: [ ] # 비면 CORS 비활성(로컬)
+  encryption_secret: "local-dev-only-encryption-key-change-me" # 로컬 편의값(API 키 DB 직접 저장용). 운영은 env(APP_ENCRYPTION_SECRET) 주입
 database:
   driver: "sqlite"
   dsn: "file:~/aiagent.db?_pragma=busy_timeout(5000)"  # 홈 경로(리눅스 fs). /mnt/c 의 sqlite I/O 이슈 회피. ~ 는 config 로더가 홈으로 확장

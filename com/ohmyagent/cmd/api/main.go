@@ -46,6 +46,10 @@ const (
 	seedPasswordBytes = 16
 	// defaultSeedAdminUsername: 시드 admin 사용자명 미설정 시 기본값.
 	defaultSeedAdminUsername = "admin"
+	// idleTimeout: keep-alive 유휴 커넥션 한도(고동접에서 커넥션 재활용·정리).
+	idleTimeout = 120 * time.Second
+	// readHeaderTimeout: 요청 헤더 수신 한도(slowloris 완화).
+	readHeaderTimeout = 10 * time.Second
 )
 
 func main() {
@@ -175,10 +179,12 @@ func run() error {
 	// 8) 미들웨어 체인 + 서버
 	handler := security.Chain(router.Mux(), cfg.Security.AllowedOrigins)
 	srv := &http.Server{
-		Addr:         cfg.ServerAddr(),
-		Handler:      handler,
-		ReadTimeout:  cfg.Server.ReadTimeout.Std(),
-		WriteTimeout: cfg.Server.WriteTimeout.Std(),
+		Addr:              cfg.ServerAddr(),
+		Handler:           handler,
+		ReadTimeout:       cfg.Server.ReadTimeout.Std(),
+		ReadHeaderTimeout: readHeaderTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout.Std(),
+		IdleTimeout:       idleTimeout,
 	}
 
 	// 9) graceful shutdown

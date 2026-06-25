@@ -50,14 +50,20 @@ LLM 공식 SDK(`openai-go/v3`, `anthropic-sdk-go`, `google.golang.org/genai`, `o
 `configs/{APP_ENV}.yaml`을 읽는다(`APP_ENV` 미설정 시 `local`). 기본 `configs/local.yaml`:
 ```yaml
 server: { port: 8080, read_timeout: "10s", write_timeout: "10s" }
-security: { allowed_origins: [] }        # 비면 CORS 비활성(로컬)
-database: { driver: "sqlite", dsn: "file:aiagent.db?_pragma=busy_timeout(5000)", max_open_conns: 1 }
+security:
+  allowed_origins: []                     # 비면 CORS 비활성(로컬)
+  encryption_secret: "..."                # API 키 DB 직접 저장용(AES-GCM). 운영은 env(APP_ENCRYPTION_SECRET) override
+database:
+  driver: "sqlite"
+  dsn: "file:~/aiagent.db?_pragma=busy_timeout(5000)"  # ~ 는 홈으로 확장. /mnt/c 등 Windows 마운트의 sqlite I/O 이슈 회피
+  max_open_conns: 1
 auth:
   jwt_secret: ""                          # 운영은 env(APP_AUTH_JWT_SECRET) 필수
   jwt_expiry: "24h"
   seed_admin_username: "admin"
   seed_admin_password: "admin"            # 비운영 편의값(운영은 env 주입)
 ```
+> sqlite DSN 의 `~`/`~/` 는 config 로더가 사용자 홈으로 확장한다(`expandHomePath`).
 
 ### 4) 실행
 ```bash
@@ -91,7 +97,7 @@ APP_ENV=local go run ./com/ohmyagent/cmd/api
 | `APP_DATABASE_DSN` | DB DSN 오버라이드 |
 | `APP_AUTH_SEED_ADMIN_PASSWORD` | 시드 admin 비밀번호 |
 | `APP_DB_RESET` | `1`/`true`/`yes`/`on`이면 기동 시 **DB 전체 drop & 재생성**(데이터 삭제). 기본 off. **운영(prod)에서는 무시** |
-| `APP_ENCRYPTION_SECRET` | Provider API 키를 DB에 **직접 저장**할 때 AES-GCM 암호화 키 소스. 미설정 시 직접 저장 불가(환경변수명 방식만 가능). yaml `security.encryption_secret`로도 주입 가능 |
+| `APP_ENCRYPTION_SECRET` | Provider API 키를 DB에 **직접 저장**할 때 AES-GCM 암호화 키 소스. yaml `security.encryption_secret`(모든 환경 기본값 제공)보다 **우선**. **운영은 반드시 고유 값으로 override**(예: `openssl rand -base64 32`) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | 각 LLM Provider API 키(Provider의 `api_key_env`에 변수명만 등록) |
 | `OLLAMA_HOST` | Ollama 엔드포인트(미설정 시 `http://localhost:11434`) |
 
@@ -115,9 +121,25 @@ APP_DB_RESET=1 APP_ENV=local go run ./com/ohmyagent/cmd/api
 | Google Gemini | EXTERNAL | `gemini-1.5-flash` | `GEMINI_API_KEY` | `gemini*` |
 | Ollama(Local) | LOCAL | `llama3` | — | LOCAL |
 
-> 🔒 API 키 **값**은 DB에 저장하지 않는다. 서버 환경변수로 두고 Provider에는 **변수명만** 등록한다.
+API 키는 **둘 중 하나**로 등록:
+- **① 환경변수명**(`api_key_env`): 서버 env에 키를 두고 Provider엔 변수명(`OPENAI_API_KEY`)만. 추가 설정 불필요.
+- **② 직접 저장**(`api_key`): 키 값을 입력하면 서버가 **AES-GCM 암호화**하여 DB 저장. 응답엔 `api_key_set`(마스킹)만 노출하고 원문은 절대 반환하지 않음. `security.encryption_secret`(env `APP_ENCRYPTION_SECRET`) 필요 — 기본값이 모든 환경에 제공되어 로컬은 바로 동작.
 
 질의는 `POST /api/v1/chat`(SSE), 에이전트 루프는 `POST /api/v1/agent/chat`(SSE, function-calling). 상세는 [`docs/API-SPEC.md`](./docs/API-SPEC.md).
+
+---
+
+## 성능 / 동시성 (대규모 동접)
+
+수천~수만 동접을 견디도록 N/W IO·풀을 튜닝했다.
+
+- **HTTP 서버**: keep-alive `IdleTimeout`(120s)·`ReadHeaderTimeout`(slowloris 완화). SSE 핸들러는 write deadline 을 해제해 장시간 스트리밍 유지.
+- **DB 풀**: `MaxIdleConns = MaxOpenConns`(기본 2 → 부하 시 커넥션 churn 제거), `ConnMaxLifetime`(30m)·`ConnMaxIdleTime`(5m)로 스테일 커넥션 정리. mysql 풀 크기는 `max_open_conns`(prod 기본 20)로 조정.
+- **LLM 업스트림**: 모든 외부 어댑터가 **공유 HTTP 클라이언트**(Transport `MaxIdleConnsPerHost=64`, HTTP/2)로 OpenAI/Claude/Gemini 커넥션을 재사용(기본 2 병목 제거). 전역 타임아웃 없이 ctx 로 취소.
+- **활성 Provider 캐시**: 질의마다 DB 조회 없이 `atomic.Value` 캐시에서 활성 Provider 해석.
+- **로깅**: 헬스 체크 제외(LB 폴링 노이즈), `request_id`(`X-Request-Id`) 상관관계, 상태/지연 기반 레벨, 응답 바이트·클라이언트 IP 포함.
+
+> 수평 확장: 상태는 DB 에만 있고 핸들러는 stateless(JWT)라 인스턴스를 늘려 LB 뒤에 두면 된다. sqlite 는 단일 노드용이므로 다중 인스턴스는 **mysql** 사용.
 
 ---
 

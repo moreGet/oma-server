@@ -4,6 +4,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -17,6 +18,10 @@ const (
 	sqliteMaxOpenConns = 1
 	// defaultMaxOpenConns: mysql 등에서 maxOpenConns 인자가 <=0 일 때의 기본값.
 	defaultMaxOpenConns = 10
+	// connMaxLifetime: 커넥션 최대 수명. mysql wait_timeout/LB 재분배로 인한 스테일 커넥션 방지.
+	connMaxLifetime = 30 * time.Minute
+	// connMaxIdleTime: 유휴 커넥션 정리 한도(피크 후 풀 축소).
+	connMaxIdleTime = 5 * time.Minute
 )
 
 // Open 은 driver/dsn 으로 *sql.DB 를 열고 풀을 설정한다.
@@ -35,15 +40,22 @@ func Open(driver, dsn string, maxOpenConns int) (*sql.DB, error) {
 		return nil, fmt.Errorf("db: open %s: %w", driver, err)
 	}
 
+	var maxOpen int
 	switch driver {
 	case "sqlite":
-		conn.SetMaxOpenConns(sqliteMaxOpenConns)
+		maxOpen = sqliteMaxOpenConns
 	default: // mysql 등
-		if maxOpenConns <= 0 {
-			maxOpenConns = defaultMaxOpenConns
+		maxOpen = maxOpenConns
+		if maxOpen <= 0 {
+			maxOpen = defaultMaxOpenConns
 		}
-		conn.SetMaxOpenConns(maxOpenConns)
 	}
+	conn.SetMaxOpenConns(maxOpen)
+	// 유휴 풀을 MaxOpen 과 동일하게 두어 고동접에서 커넥션 open/close churn 을 줄인다
+	// (database/sql 기본 MaxIdleConns=2 는 부하 시 병목). 수명/유휴 한도로 스테일 커넥션 정리.
+	conn.SetMaxIdleConns(maxOpen)
+	conn.SetConnMaxLifetime(connMaxLifetime)
+	conn.SetConnMaxIdleTime(connMaxIdleTime)
 
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -24,19 +25,21 @@ const (
 
 // ClaudeAdapter 는 공식 Anthropic Go SDK 를 사용하는 Messages API(스트리밍, tool use) 어댑터다.
 type ClaudeAdapter struct {
-	endpoint  string
-	model     string
-	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
-	apiKeyEnv string
+	endpoint   string
+	model      string
+	apiKey     string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
+	apiKeyEnv  string
+	httpClient *http.Client // 공유 커넥션 풀(factory 가 주입)
 }
 
 // NewClaudeAdapter 는 도메인 ProviderConfig 로부터 ClaudeAdapter 를 생성한다.
-func NewClaudeAdapter(config domainllmprovider.ProviderConfig) *ClaudeAdapter {
+func NewClaudeAdapter(config domainllmprovider.ProviderConfig, httpClient *http.Client) *ClaudeAdapter {
 	return &ClaudeAdapter{
-		endpoint:  config.Endpoint,
-		model:     config.Model,
-		apiKey:    config.APIKey,
-		apiKeyEnv: config.APIKeyEnv,
+		endpoint:   config.Endpoint,
+		model:      config.Model,
+		apiKey:     config.APIKey,
+		apiKeyEnv:  config.APIKeyEnv,
+		httpClient: httpClient,
 	}
 }
 
@@ -206,6 +209,9 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 	}
 
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if a.httpClient != nil {
+		opts = append(opts, option.WithHTTPClient(a.httpClient))
+	}
 	if a.endpoint != "" {
 		opts = append(opts, option.WithBaseURL(a.endpoint))
 	}

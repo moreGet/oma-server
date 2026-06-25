@@ -4,6 +4,7 @@ server:
   write_timeout: "10s"
 security:
   allowed_origins: []
+  encryption_secret: "local-dev-only-encryption-key-change-me" # API 키 DB 직접 저장용 기본값. 운영은 env(APP_ENCRYPTION_SECRET)로 override
 database:
   driver: "mysql"
   dsn: ""                      # env(APP_DATABASE_DSN) 주입. 예: user:pw@tcp(db:3306)/aiagent?parseTime=true

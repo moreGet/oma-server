@@ -26,13 +26,14 @@ const (
 // 공식 Ollama Go SDK(github.com/ollama/ollama/api)의 Chat 스트리밍 API 를 사용한다.
 // 로컬 LLM 이므로 API 키는 사용하지 않는다.
 type OllamaAdapter struct {
-	endpoint string // 사용자 지정 엔드포인트("" 이면 환경변수/기본값)
-	model    string // Provider 기본 모델("" 이면 defaultOllamaModel)
+	endpoint   string       // 사용자 지정 엔드포인트("" 이면 환경변수/기본값)
+	model      string       // Provider 기본 모델("" 이면 defaultOllamaModel)
+	httpClient *http.Client // 공유 커넥션 풀(factory 가 주입)
 }
 
 // NewOllamaAdapter 는 도메인 ProviderConfig 로부터 OllamaAdapter 를 생성한다.
-func NewOllamaAdapter(config domainllmprovider.ProviderConfig) *OllamaAdapter {
-	return &OllamaAdapter{endpoint: config.Endpoint, model: config.Model}
+func NewOllamaAdapter(config domainllmprovider.ProviderConfig, httpClient *http.Client) *OllamaAdapter {
+	return &OllamaAdapter{endpoint: config.Endpoint, model: config.Model, httpClient: httpClient}
 }
 
 // ProviderType 은 LOCAL 을 반환한다.
@@ -55,12 +56,16 @@ func (a *OllamaAdapter) resolveModel(reqModel string) string {
 //   - endpoint 가 지정되면 해당 URL 로 api.NewClient 를 만든다.
 //   - 비어 있으면 api.ClientFromEnvironment 로 OLLAMA_HOST(기본 http://localhost:11434)를 사용한다.
 func (a *OllamaAdapter) newOllamaClient() (*api.Client, error) {
+	hc := a.httpClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
 	if a.endpoint != "" {
 		u, err := url.Parse(a.endpoint)
 		if err != nil {
 			return nil, fmt.Errorf("ollama: %w: parse endpoint %q: %v", domainllmprovider.ErrUpstream, a.endpoint, err)
 		}
-		return api.NewClient(u, http.DefaultClient), nil
+		return api.NewClient(u, hc), nil
 	}
 	client, err := api.ClientFromEnvironment()
 	if err != nil {

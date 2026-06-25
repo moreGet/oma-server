@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -25,20 +26,22 @@ const (
 // 주의: 클라이언트는 ChatStream 호출마다 생성한다. API 키는 환경변수에서 매 호출 시 읽으므로
 // 어댑터 인스턴스는 키 값을 보관하지 않는다(보안 + 키 회전 대응).
 type GeminiAdapter struct {
-	endpoint  string // 현재 Gemini Developer 백엔드에서는 사용하지 않음(미래 확장/문서화 목적 보존)
-	model     string
-	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
-	apiKeyEnv string
+	endpoint   string // 현재 Gemini Developer 백엔드에서는 사용하지 않음(미래 확장/문서화 목적 보존)
+	model      string
+	apiKey     string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
+	apiKeyEnv  string
+	httpClient *http.Client // 공유 커넥션 풀(factory 가 주입)
 }
 
 // NewGeminiAdapter 는 도메인 ProviderConfig 로부터 GeminiAdapter 를 생성한다.
 // 스트리밍은 장시간 지속될 수 있으므로 타임아웃은 두지 않고 ctx 로 취소를 제어한다.
-func NewGeminiAdapter(config domainllmprovider.ProviderConfig) *GeminiAdapter {
+func NewGeminiAdapter(config domainllmprovider.ProviderConfig, httpClient *http.Client) *GeminiAdapter {
 	return &GeminiAdapter{
-		endpoint:  config.Endpoint,
-		model:     config.Model,
-		apiKey:    config.APIKey,
-		apiKeyEnv: config.APIKeyEnv,
+		endpoint:   config.Endpoint,
+		model:      config.Model,
+		apiKey:     config.APIKey,
+		apiKeyEnv:  config.APIKeyEnv,
+		httpClient: httpClient,
 	}
 }
 
@@ -69,8 +72,9 @@ func (a *GeminiAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
-		Backend: genai.BackendGeminiAPI,
+		APIKey:     apiKey,
+		Backend:    genai.BackendGeminiAPI,
+		HTTPClient: a.httpClient, // 공유 커넥션 풀
 	})
 	if err != nil {
 		return fmt.Errorf("gemini: %w: create client: %v", domainllmprovider.ErrUpstream, err)

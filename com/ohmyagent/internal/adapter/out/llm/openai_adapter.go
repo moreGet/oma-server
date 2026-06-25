@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -26,20 +27,22 @@ const (
 //
 // 손작성 net/http 구현을 대체하며, SSE 파싱·재시도·인증 헤더는 SDK 에 위임한다.
 type OpenAIAdapter struct {
-	endpoint  string // 빈 문자열이면 SDK 기본(api.openai.com) 사용
-	model     string
-	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
-	apiKeyEnv string
+	endpoint   string // 빈 문자열이면 SDK 기본(api.openai.com) 사용
+	model      string
+	apiKey     string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
+	apiKeyEnv  string
+	httpClient *http.Client // 공유 커넥션 풀(factory 가 주입)
 }
 
 // NewOpenAIAdapter 는 도메인 ProviderConfig 로부터 OpenAIAdapter 를 생성한다.
-// SDK 클라이언트는 API 키가 필요하므로 호출 시점(ChatStream)에 생성한다.
-func NewOpenAIAdapter(config domainllmprovider.ProviderConfig) *OpenAIAdapter {
+// SDK 클라이언트는 API 키가 필요하므로 호출 시점(ChatStream)에 생성하되, HTTP 커넥션 풀은 공유한다.
+func NewOpenAIAdapter(config domainllmprovider.ProviderConfig, httpClient *http.Client) *OpenAIAdapter {
 	return &OpenAIAdapter{
-		endpoint:  config.Endpoint,
-		model:     config.Model,
-		apiKey:    config.APIKey,
-		apiKeyEnv: config.APIKeyEnv,
+		endpoint:   config.Endpoint,
+		model:      config.Model,
+		apiKey:     config.APIKey,
+		apiKeyEnv:  config.APIKeyEnv,
+		httpClient: httpClient,
 	}
 }
 
@@ -63,6 +66,9 @@ func (a *OpenAIAdapter) resolveModel(reqModel string) string {
 // 스트리밍은 장시간 지속될 수 있어 전역 HTTP 타임아웃을 두지 않고 ctx 로 취소를 제어한다.
 func (a *OpenAIAdapter) newClient(apiKey string) openai.Client {
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if a.httpClient != nil {
+		opts = append(opts, option.WithHTTPClient(a.httpClient))
+	}
 	if a.endpoint != "" {
 		opts = append(opts, option.WithBaseURL(a.endpoint))
 	}

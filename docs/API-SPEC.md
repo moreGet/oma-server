@@ -241,8 +241,9 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 | `GET /api/v1/statistics` | admin | 대시보드 집계 `{members:{total,by_role}, providers:{total,active}}` |
 
 ### 어드민 웹 페이지 (`/admin`)
-- **스택**: 서버사이드 렌더링 `html/template` + **htmx**(CDN) + **Pico.css**(CDN). Node 빌드 불필요, Go 바이너리에 `go:embed`.
+- **스택**: 서버사이드 렌더링 `html/template` + **Bootstrap 5.3(다크 `data-bs-theme`)** + **Bootstrap Icons**(CDN). 사이드바 레이아웃, 생성/관리는 **모달**. Node 빌드 불필요, Go 바이너리에 `go:embed`.
 - **인증**: 로그인 시 JWT 를 **HttpOnly·SameSite=Lax 쿠키**(`admin_session`)에 저장. 페이지는 쿠키로 인증(API 의 Bearer 와 독립).
-- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록·생성·역할변경·활성토글·비번리셋·삭제), `/admin/providers`(목록·생성·설정수정·활성화·연결테스트·삭제), `/admin/account`(비번 변경).
-- **권한 UI 게이팅**: USER 는 읽기 전용(멤버 메뉴 숨김, Provider 변경 버튼 숨김). 백엔드 use case 가 이중으로 인가 강제.
+- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 역할변경·활성토글·비번리셋·삭제), `/admin/providers`(목록 + 등록/관리 모달: 설정수정·활성화·연결테스트·삭제), `/admin/account`(비번 변경).
+- **액션 피드백**: 작업 결과는 **토스트**(성공=초록/오류=빨강)로 노출. 플래시는 쿠키에 base64 인코딩(한글 보존) + 성공/오류 레벨 구분.
+- **권한 UI 게이팅**: USER 는 읽기 전용(멤버 메뉴 숨김, Provider 변경 버튼 숨김). 백엔드 use case 가 이중으로 인가 강제. 멤버 생성/역할 드롭다운은 actor 가 제어 가능한 역할만 노출.
 - 같은 오리진이라 CORS 불필요. (CSRF 는 SameSite=Lax 로 1차 완화; 토큰 기반 CSRF 는 후속.)

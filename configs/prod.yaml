@@ -4,6 +4,7 @@ server:
   write_timeout: "10s"
 security:
   allowed_origins: []          # 운영 도메인을 명시적으로 채울 것
+  encryption_secret: "local-dev-only-encryption-key-change-me" # ⚠️ 기본 placeholder. 운영은 반드시 env(APP_ENCRYPTION_SECRET)로 고유 값 주입할 것(공유 시 키 복호화 위험)
 database:
   driver: "mysql"
   dsn: ""                      # env(APP_DATABASE_DSN) 주입. 예: user:pw@tcp(host:3306)/aiagent?parseTime=true
