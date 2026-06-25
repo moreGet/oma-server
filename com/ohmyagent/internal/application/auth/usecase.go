@@ -5,6 +5,7 @@ package authapp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,18 +44,22 @@ func (u *AuthUseCase) Login(ctx context.Context, cmd domainauth.LoginCommand) (s
 	member, err := u.members.FindByUsername(ctx, cmd.Username)
 	if err != nil {
 		// 존재하지 않는 사용자도 자격증명 실패로 통일(사용자 열거 방지).
+		slog.Warn("login failed", "event", "auth.login", "username", cmd.Username, "reason", "unknown_user")
 		return "", domainauth.Member{}, domainauth.ErrInvalidCredentials
 	}
 	if !member.Active {
+		slog.Warn("login failed", "event", "auth.login", "username", cmd.Username, "reason", "inactive")
 		return "", domainauth.Member{}, domainauth.ErrInvalidCredentials
 	}
 	if err := u.hasher.Compare(member.PasswordHash, cmd.Password); err != nil {
+		slog.Warn("login failed", "event", "auth.login", "username", cmd.Username, "reason", "bad_password")
 		return "", domainauth.Member{}, domainauth.ErrInvalidCredentials
 	}
 	token, err := u.tokens.Generate(member)
 	if err != nil {
 		return "", domainauth.Member{}, fmt.Errorf("generate token: %w", err)
 	}
+	slog.Info("login succeeded", "event", "auth.login", "username", member.Username, "member_id", member.ID, "level", int(member.Role.Level))
 	return token, member, nil
 }
 
@@ -82,11 +87,6 @@ func (u *AuthUseCase) RequireAdmin(ctx context.Context, actorID string) error {
 		return domainauth.ErrPermission
 	}
 	return nil
-}
-
-// EnsureProjectAccess 는 admin↑ 통과로 단순화한다(설계 §9-6).
-func (u *AuthUseCase) EnsureProjectAccess(ctx context.Context, actorID string, projectID int) error {
-	return u.RequireAdmin(ctx, actorID)
 }
 
 // --- 멤버 관리(§8.1) ---
@@ -159,6 +159,8 @@ func (u *AuthUseCase) CreateMember(ctx context.Context, cmd domainauth.CreateMem
 	if err := u.members.Save(ctx, member); err != nil {
 		return domainauth.Member{}, err
 	}
+	slog.Info("member created", "event", "member.created",
+		"actor", cmd.ActorID, "member_id", member.ID, "username", member.Username, "role_id", member.Role.ID)
 	return member, nil
 }
 
@@ -182,6 +184,8 @@ func (u *AuthUseCase) ChangeRole(ctx context.Context, cmd domainauth.ChangeRoleC
 	if err := u.members.Update(ctx, target); err != nil {
 		return domainauth.Member{}, err
 	}
+	slog.Info("member role changed", "event", "member.role_changed",
+		"actor", cmd.ActorID, "target", cmd.TargetID, "role_id", cmd.RoleID)
 	return target, nil
 }
 
@@ -198,6 +202,8 @@ func (u *AuthUseCase) SetActive(ctx context.Context, cmd domainauth.SetActiveCom
 	if err := u.members.Update(ctx, target); err != nil {
 		return domainauth.Member{}, err
 	}
+	slog.Info("member active changed", "event", "member.active_changed",
+		"actor", cmd.ActorID, "target", cmd.TargetID, "active", cmd.Active)
 	return target, nil
 }
 
@@ -206,7 +212,11 @@ func (u *AuthUseCase) DeleteMember(ctx context.Context, actorID, targetID string
 	if _, _, err := u.requireControl(ctx, actorID, targetID); err != nil {
 		return err
 	}
-	return u.members.Delete(ctx, targetID)
+	if err := u.members.Delete(ctx, targetID); err != nil {
+		return err
+	}
+	slog.Info("member deleted", "event", "member.deleted", "actor", actorID, "target", targetID)
+	return nil
 }
 
 // --- 비밀번호 / 역할 ---
@@ -227,7 +237,11 @@ func (u *AuthUseCase) ChangePassword(ctx context.Context, actorID, oldPassword, 
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	return u.members.UpdatePassword(ctx, actor.ID, hash, u.now().Unix(), actor.ID)
+	if err := u.members.UpdatePassword(ctx, actor.ID, hash, u.now().Unix(), actor.ID); err != nil {
+		return err
+	}
+	slog.Info("password changed", "event", "member.password_changed", "actor", actor.ID)
+	return nil
 }
 
 // ResetPassword 는 admin↑ 가 제어 가능한 하위 멤버의 비밀번호를 리셋한다(기존 비번 불필요).
@@ -243,7 +257,11 @@ func (u *AuthUseCase) ResetPassword(ctx context.Context, actorID, targetID, newP
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	return u.members.UpdatePassword(ctx, targetID, hash, u.now().Unix(), actor.ID)
+	if err := u.members.UpdatePassword(ctx, targetID, hash, u.now().Unix(), actor.ID); err != nil {
+		return err
+	}
+	slog.Info("member password reset", "event", "member.password_reset", "actor", actor.ID, "target", targetID)
+	return nil
 }
 
 // ListRoles 는 역할 목록(마스터데이터)을 반환한다.
@@ -258,6 +276,7 @@ func (u *AuthUseCase) requireControl(ctx context.Context, actorID, targetID stri
 		return domainauth.Member{}, domainauth.Member{}, err
 	}
 	if actor.Role.Level < domainauth.RoleLevelAdmin {
+		slog.Warn("member control denied", "event", "member.denied", "actor", actorID, "target", targetID, "reason", "not_admin")
 		return domainauth.Member{}, domainauth.Member{}, domainauth.ErrPermission
 	}
 	target, err := u.members.FindByID(ctx, targetID)
@@ -265,6 +284,7 @@ func (u *AuthUseCase) requireControl(ctx context.Context, actorID, targetID stri
 		return domainauth.Member{}, domainauth.Member{}, err
 	}
 	if !actor.Role.Level.CanControl(target.Role.Level) {
+		slog.Warn("member control denied", "event", "member.denied", "actor", actorID, "target", targetID, "reason", "cannot_control")
 		return domainauth.Member{}, domainauth.Member{}, domainauth.ErrPermission
 	}
 	return actor, target, nil

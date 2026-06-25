@@ -150,7 +150,10 @@ type DeleteCommand struct {
 }
 
 // Normalize 는 입력을 정규화한다.
-func (c *CreateCommand) Normalize() { c.Name = strings.TrimSpace(c.Name) }
+func (c *CreateCommand) Normalize() {
+	c.Name = strings.TrimSpace(c.Name)
+	c.Config.Normalize()
+}
 
 // Validate 는 Provider 생성 입력을 검증한다.
 func (c *CreateCommand) Validate() error {
@@ -161,5 +164,46 @@ func (c *CreateCommand) Validate() error {
 	if c.ProviderType != ProviderTypeLocal && c.ProviderType != ProviderTypeExternal {
 		return &ErrValidation{Msg: "provider_type must be LOCAL or EXTERNAL"}
 	}
+	return c.Config.Validate()
+}
+
+// Validate 는 Provider 설정 갱신 입력을 검증한다.
+func (c *UpdateConfigCommand) Validate() error {
+	c.Config.Normalize()
+	return c.Config.Validate()
+}
+
+// Normalize 는 ProviderConfig 입력의 공백을 제거한다.
+func (c *ProviderConfig) Normalize() {
+	c.Endpoint = strings.TrimSpace(c.Endpoint)
+	c.Model = strings.TrimSpace(c.Model)
+	c.APIKeyEnv = strings.TrimSpace(c.APIKeyEnv)
+}
+
+// Validate 는 ProviderConfig 의 형식·보안 제약을 검증한다.
+// APIKeyEnv 는 환경변수 "이름"만 허용한다(예: OPENAI_API_KEY). 키 값을 직접 넣으면
+// 시크릿이 DB 에 저장·로그에 노출될 수 있으므로 거부한다. 빈 값은 허용(LOCAL 등 키 불필요).
+func (c ProviderConfig) Validate() error {
+	if c.APIKeyEnv != "" && !validEnvVarName(c.APIKeyEnv) {
+		return &ErrValidation{Msg: "api_key_env must be an environment variable NAME (e.g. OPENAI_API_KEY), not the key value"}
+	}
 	return nil
+}
+
+// validEnvVarName 은 POSIX 환경변수 이름 규칙(^[A-Za-z_][A-Za-z0-9_]*$)을 만족하는지 검사한다.
+// API 키 값(sk-..., 하이픈/소문자 혼합 등)은 이 규칙을 통과하지 못한다.
+func validEnvVarName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_':
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }

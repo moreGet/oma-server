@@ -1,6 +1,8 @@
 package web
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -145,12 +147,15 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	if pd.CanManageMembers {
 		dv.ShowMembers = true
-		if _, total, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{}); err == nil {
+		// 멤버를 한 번만 조회하고 역할별 카운트는 메모리에서 집계한다(역할별 추가 쿼리 3회 제거).
+		if members, total, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{}); err == nil {
 			dv.MemberTotal = total
-		}
-		for _, roleID := range []int{domainauth.RoleIDUser, domainauth.RoleIDAdmin, domainauth.RoleIDSuperAdmin} {
-			if _, n, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{RoleID: roleID}); err == nil {
-				dv.ByRole = append(dv.ByRole, roleCount{Name: domainauth.NameForRoleID(roleID), Count: n})
+			counts := make(map[int]int, 3)
+			for _, m := range members {
+				counts[m.Role.ID]++
+			}
+			for _, roleID := range []int{domainauth.RoleIDUser, domainauth.RoleIDAdmin, domainauth.RoleIDSuperAdmin} {
+				dv.ByRole = append(dv.ByRole, roleCount{Name: domainauth.NameForRoleID(roleID), Count: counts[roleID]})
 			}
 		}
 	}
@@ -300,7 +305,13 @@ func (s *Server) providerActivate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) providerTest(w http.ResponseWriter, r *http.Request) {
 	if err := s.providers.TestConnection(r.Context(), actorID(r), r.PathValue("id")); err != nil {
-		s.setFlash(w, "연결 테스트 실패: "+err.Error())
+		// 연결 진단용 상세는 upstream 에러일 때만 노출(시크릿은 도메인 검증으로 사전 차단됨).
+		// 그 외(권한/대상 없음)는 친화 메시지로 매핑. 원시 에러는 use case 가 서버 로깅함.
+		msg := webErrorMessage(err)
+		if errors.Is(err, domainllmprovider.ErrUpstream) {
+			msg = err.Error()
+		}
+		s.setFlash(w, "연결 테스트 실패: "+msg)
 	} else {
 		s.setFlash(w, "연결 테스트 성공 ✓")
 	}
@@ -328,12 +339,39 @@ func (s *Server) accountChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // flashResult 는 use case 결과를 플래시 메시지로 변환한다.
+// 실패 시 원시 에러를 사용자에게 노출하지 않고 친화적 메시지로 매핑하며,
+// 운영/감사를 위해 원시 에러는 서버 로그로 남긴다(시크릿 누출 방지).
 func (s *Server) flashResult(w http.ResponseWriter, err error, okMsg string) {
 	if err != nil {
-		s.setFlash(w, "오류: "+err.Error())
+		slog.Warn("admin action failed", "event", "admin.action", "error", err)
+		s.setFlash(w, webErrorMessage(err))
 		return
 	}
 	s.setFlash(w, okMsg)
+}
+
+// webErrorMessage 는 도메인 에러를 사용자 친화 한글 메시지로 매핑한다(글로벌 예외 처리).
+// 검증 에러 메시지는 사용자에게 보여주도록 설계된 안내이므로 그대로 노출하고,
+// 그 외 알 수 없는 에러는 내부 상세를 숨기고 일반 메시지로 대체한다.
+func webErrorMessage(err error) string {
+	var ave *domainauth.ErrValidation
+	var pve *domainllmprovider.ErrValidation
+	switch {
+	case errors.As(err, &ave):
+		return ave.Msg
+	case errors.As(err, &pve):
+		return pve.Msg
+	case errors.Is(err, domainauth.ErrPermission):
+		return "이 작업을 수행할 권한이 없습니다."
+	case errors.Is(err, domainauth.ErrInvalidCredentials):
+		return "현재 비밀번호가 올바르지 않습니다."
+	case errors.Is(err, domainauth.ErrConflict), errors.Is(err, domainllmprovider.ErrConflict):
+		return "이미 존재하는 항목입니다."
+	case errors.Is(err, domainauth.ErrNotFound), errors.Is(err, domainllmprovider.ErrNotFound):
+		return "대상을 찾을 수 없습니다."
+	default:
+		return "처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+	}
 }
 
 // --- 매핑 ---

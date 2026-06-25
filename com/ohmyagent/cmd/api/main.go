@@ -37,8 +37,12 @@ import (
 const (
 	// shutdownTimeout: graceful shutdown 시 진행 중 요청 대기 한도.
 	shutdownTimeout = 15 * time.Second
+	// migrationTimeout: 기동 시 DB 마이그레이션(Up/Reset) 작업 한도.
+	migrationTimeout = 30 * time.Second
 	// seedTimeout: 비운영 시딩 작업 한도.
 	seedTimeout = 10 * time.Second
+	// seedPasswordBytes: 시드 admin 랜덤 비밀번호 바이트 수.
+	seedPasswordBytes = 16
 	// defaultSeedAdminUsername: 시드 admin 사용자명 미설정 시 기본값.
 	defaultSeedAdminUsername = "admin"
 )
@@ -66,11 +70,11 @@ func run() error {
 	}
 	defer func() { _ = conn.Close() }()
 
-	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	migCtx, migCancel := context.WithTimeout(context.Background(), migrationTimeout)
 	defer migCancel()
 	if cfg.ResetsDatabase() {
-		// 로컬: 매 기동마다 DB 를 drop & create 하여 깨끗한 스키마 + 시드 재생성을 보장한다.
-		log.Warn("local env: resetting database (drop & recreate all tables)")
+		// APP_DB_RESET 옵트인: DB 를 drop & create 하여 깨끗한 스키마 + 시드 재생성(모든 데이터 삭제 주의).
+		log.Warn("APP_DB_RESET enabled: resetting database — DROPS ALL DATA, then re-seeds")
 		if err := dbout.ResetMigrations(migCtx, cfg.Database.Driver, conn); err != nil {
 			return err
 		}
@@ -226,7 +230,7 @@ func ensureSuperAdmin(
 	password := cfg.Auth.SeedAdminPassword
 	generated := false
 	if password == "" {
-		pw, err := randomPassword(16)
+		pw, err := randomPassword(seedPasswordBytes)
 		if err != nil {
 			log.Error("ensure super admin: generate password failed", "error", err)
 			return

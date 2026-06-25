@@ -40,16 +40,19 @@ func (h *StatsHandler) Get(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
 	actorID := claims.MemberID
 
-	_, total, err := h.auth.ListMembers(r.Context(), actorID, domainauth.MemberFilter{})
+	members, total, err := h.auth.ListMembers(r.Context(), actorID, domainauth.MemberFilter{})
 	if err != nil {
 		return authErrToHTTP(err)
 	}
 
-	byRole := make(map[string]int, 3)
-	for _, roleID := range []int{domainauth.RoleIDUser, domainauth.RoleIDAdmin, domainauth.RoleIDSuperAdmin} {
-		if _, n, e := h.auth.ListMembers(r.Context(), actorID, domainauth.MemberFilter{RoleID: roleID}); e == nil {
-			byRole[domainauth.NameForRoleID(roleID)] = n
-		}
+	// 역할별 집계는 이미 조회한 멤버 목록을 메모리에서 카운트한다(역할별 추가 쿼리 3회 제거).
+	byRole := map[string]int{
+		domainauth.NameForRoleID(domainauth.RoleIDUser):       0,
+		domainauth.NameForRoleID(domainauth.RoleIDAdmin):      0,
+		domainauth.NameForRoleID(domainauth.RoleIDSuperAdmin): 0,
+	}
+	for _, m := range members {
+		byRole[domainauth.NameForRoleID(m.Role.ID)]++
 	}
 
 	providers, err := h.providers.List(r.Context(), actorID)

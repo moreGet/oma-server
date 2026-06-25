@@ -23,7 +23,6 @@ type Service interface {
 	// 인가 게이트(타 도메인이 accessGate 로 재사용; §4.4)
 	RequireActiveMember(ctx context.Context, actorID string) (Member, error)
 	RequireAdmin(ctx context.Context, actorID string) error
-	EnsureProjectAccess(ctx context.Context, actorID string, projectID int) error
 }
 
 // Repository — out 포트(멤버 영속화).

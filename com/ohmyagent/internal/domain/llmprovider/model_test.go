@@ -49,6 +49,17 @@ func TestCreateCommand_Validate(t *testing.T) {
 			wantErr: true,
 			wantMsg: "provider_type must be LOCAL or EXTERNAL",
 		},
+		{
+			name:    "valid api_key_env name",
+			cmd:     CreateCommand{Name: "openai", ProviderType: ProviderTypeExternal, Config: ProviderConfig{APIKeyEnv: "OPENAI_API_KEY"}},
+			wantErr: false,
+		},
+		{
+			name:    "api_key_env holding a key value is rejected",
+			cmd:     CreateCommand{Name: "openai", ProviderType: ProviderTypeExternal, Config: ProviderConfig{APIKeyEnv: "sk-proj-abc-123"}},
+			wantErr: true,
+			wantMsg: "api_key_env must be an environment variable NAME (e.g. OPENAI_API_KEY), not the key value",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

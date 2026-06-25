@@ -1,33 +1,17 @@
 {{define "content"}}
-{{if .CanManageMembers}}
-<div class="card mb-4">
-  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-person-plus me-1"></i> 새 멤버 생성</div>
-  <div class="card-body">
-    <form method="post" action="/admin/members" class="row g-3 align-items-end">
-      <div class="col-12 col-md-3">
-        <label class="form-label small text-secondary">아이디</label>
-        <input type="text" name="username" class="form-control" placeholder="username" required>
-      </div>
-      <div class="col-12 col-md-3">
-        <label class="form-label small text-secondary">비밀번호</label>
-        <input type="password" name="password" class="form-control" placeholder="8자 이상" minlength="8" required>
-      </div>
-      <div class="col-12 col-md-3">
-        <label class="form-label small text-secondary">역할</label>
-        <select name="role_id" class="form-select" required>
-          {{range .Data.Roles}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
-        </select>
-      </div>
-      <div class="col-12 col-md-3">
-        <button type="submit" class="btn btn-primary w-100"><i class="bi bi-plus-lg"></i> 생성</button>
-      </div>
-    </form>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h5 class="mb-0">멤버 목록</h5>
+    <small class="text-secondary">총 {{len .Data.Members}}명</small>
   </div>
+  {{if .CanManageMembers}}
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createMemberModal">
+    <i class="bi bi-person-plus"></i> 새 멤버
+  </button>
+  {{end}}
 </div>
-{{end}}
 
 <div class="card">
-  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-people me-1"></i> 멤버 목록</div>
   <div class="table-responsive">
     <table class="table table-hover align-middle mb-0">
       <thead>
@@ -44,28 +28,10 @@
           </td>
           <td><small class="text-secondary">{{$m.CreatedAt}}</small></td>
           {{if $.CanManageMembers}}
-          <td>
-            <div class="d-flex flex-wrap gap-2 justify-content-end">
-              <form method="post" action="/admin/members/{{$m.ID}}/role" class="d-flex gap-1">
-                <select name="role_id" class="form-select form-select-sm" style="width:auto">
-                  {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
-                </select>
-                <button type="submit" class="btn btn-sm btn-outline-light">역할변경</button>
-              </form>
-              <form method="post" action="/admin/members/{{$m.ID}}/active">
-                <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
-                <button type="submit" class="btn btn-sm btn-outline-secondary">{{if $m.Active}}비활성화{{else}}활성화{{end}}</button>
-              </form>
-              <form method="post" action="/admin/members/{{$m.ID}}/password" class="d-flex gap-1">
-                <input type="password" name="new_password" class="form-control form-control-sm" style="width:9rem" placeholder="새 비밀번호" required>
-                <button type="submit" class="btn btn-sm btn-outline-light">리셋</button>
-              </form>
-              {{if $.CanDeleteMembers}}
-              <form method="post" action="/admin/members/{{$m.ID}}/delete" onsubmit="return confirm('정말 이 멤버를 삭제할까요?');">
-                <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
-              </form>
-              {{end}}
-            </div>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#member-{{$m.ID}}">
+              <i class="bi bi-sliders"></i> 관리
+            </button>
           </td>
           {{end}}
         </tr>
@@ -75,4 +41,85 @@
   </div>
 </div>
 <p class="text-secondary small mt-3 mb-0">역할 제어: super_admin → admin·user, admin → user. 멤버 삭제는 super_admin 만 가능합니다.</p>
+
+{{if .CanManageMembers}}
+{{/* ── 멤버별 관리 모달 ── */}}
+{{range $m := .Data.Members}}
+<div class="modal fade" id="member-{{$m.ID}}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-person-gear me-1"></i>{{$m.Username}}
+          <span class="badge rounded-pill badge-{{$m.Role}} ms-1">{{$m.Role}}</span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+      </div>
+      <div class="modal-body vstack gap-3">
+        <form method="post" action="/admin/members/{{$m.ID}}/role" class="d-flex gap-2 align-items-end">
+          <div class="flex-grow-1">
+            <label class="form-label small text-secondary mb-1">역할 변경</label>
+            <select name="role_id" class="form-select">
+              {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
+            </select>
+          </div>
+          <button type="submit" class="btn btn-outline-light">변경</button>
+        </form>
+        <form method="post" action="/admin/members/{{$m.ID}}/active">
+          <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
+          <button type="submit" class="btn btn-outline-secondary w-100">
+            {{if $m.Active}}<i class="bi bi-pause-circle"></i> 비활성화{{else}}<i class="bi bi-play-circle"></i> 활성화{{end}}
+          </button>
+        </form>
+        <form method="post" action="/admin/members/{{$m.ID}}/password" class="d-flex gap-2 align-items-end">
+          <div class="flex-grow-1">
+            <label class="form-label small text-secondary mb-1">비밀번호 리셋</label>
+            <input type="password" name="new_password" class="form-control" placeholder="새 비밀번호 (8자 이상)" minlength="8" required>
+          </div>
+          <button type="submit" class="btn btn-outline-light">리셋</button>
+        </form>
+        {{if $.CanDeleteMembers}}
+        <hr class="my-1">
+        <form method="post" action="/admin/members/{{$m.ID}}/delete" onsubmit="return confirm('정말 이 멤버를 삭제할까요?');">
+          <button type="submit" class="btn btn-outline-danger w-100"><i class="bi bi-trash"></i> 멤버 삭제</button>
+        </form>
+        {{end}}
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{/* ── 멤버 생성 모달 ── */}}
+<div class="modal fade" id="createMemberModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="post" action="/admin/members">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-person-plus me-1"></i>새 멤버 생성</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+        </div>
+        <div class="modal-body vstack gap-3">
+          <div>
+            <label class="form-label small text-secondary mb-1">아이디</label>
+            <input type="text" name="username" class="form-control" placeholder="username" required>
+          </div>
+          <div>
+            <label class="form-label small text-secondary mb-1">비밀번호</label>
+            <input type="password" name="password" class="form-control" placeholder="8자 이상" minlength="8" required>
+          </div>
+          <div>
+            <label class="form-label small text-secondary mb-1">역할</label>
+            <select name="role_id" class="form-select" required>
+              {{range .Data.Roles}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg"></i> 생성</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{{end}}
 {{end}}

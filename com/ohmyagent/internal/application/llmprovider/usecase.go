@@ -4,6 +4,7 @@ package llmproviderapp
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -77,11 +78,16 @@ func (s *ProviderService) Create(ctx context.Context, cmd domainllmprovider.Crea
 	if p.IsActive {
 		s.cache.Invalidate()
 	}
+	slog.Info("provider created", "event", "provider.created",
+		"actor", cmd.ActorID, "provider_id", p.ID, "name", p.Name, "type", string(p.ProviderType), "active", p.IsActive)
 	return p, nil
 }
 
 // UpdateConfig 는 config 를 갱신한다(admin↑). 갱신 후 캐시를 무효화한다.
 func (s *ProviderService) UpdateConfig(ctx context.Context, cmd domainllmprovider.UpdateConfigCommand) (domainllmprovider.LLMProvider, error) {
+	if err := cmd.Validate(); err != nil {
+		return domainllmprovider.LLMProvider{}, err
+	}
 	if err := s.gate.RequireAdmin(ctx, cmd.ActorID); err != nil {
 		return domainllmprovider.LLMProvider{}, err
 	}
@@ -90,6 +96,7 @@ func (s *ProviderService) UpdateConfig(ctx context.Context, cmd domainllmprovide
 		return domainllmprovider.LLMProvider{}, err
 	}
 	s.cache.Invalidate()
+	slog.Info("provider config updated", "event", "provider.config_updated", "actor", cmd.ActorID, "provider_id", cmd.ID)
 	return s.repo.FindByID(ctx, cmd.ID)
 }
 
@@ -103,6 +110,7 @@ func (s *ProviderService) Activate(ctx context.Context, cmd domainllmprovider.Ac
 		return err
 	}
 	s.cache.Invalidate()
+	slog.Info("provider activated", "event", "provider.activated", "actor", cmd.ActorID, "provider_id", cmd.ID)
 	return nil
 }
 
@@ -115,6 +123,7 @@ func (s *ProviderService) Delete(ctx context.Context, cmd domainllmprovider.Dele
 		return err
 	}
 	s.cache.Invalidate()
+	slog.Info("provider deleted", "event", "provider.deleted", "actor", cmd.ActorID, "provider_id", cmd.ID)
 	return nil
 }
 
@@ -141,7 +150,14 @@ func (s *ProviderService) TestConnection(ctx context.Context, actorID, id string
 		Messages:  []domainllmprovider.ChatMessage{{Role: domainllmprovider.ChatRoleUser, Content: "ping"}},
 		MaxTokens: 1,
 	}
-	return adapter.ChatStream(testCtx, req, func(domainllmprovider.ChatStreamChunk) error { return nil })
+	if err := adapter.ChatStream(testCtx, req, func(domainllmprovider.ChatStreamChunk) error { return nil }); err != nil {
+		slog.Warn("provider connection test failed", "event", "provider.test",
+			"actor", actorID, "provider_id", id, "name", p.Name, "error", err)
+		return err
+	}
+	slog.Info("provider connection test ok", "event", "provider.test",
+		"actor", actorID, "provider_id", id, "name", p.Name)
+	return nil
 }
 
 // GetActiveAdapter 는 캐시 → DB 폴백 → 팩토리 순으로 활성 Provider 의 어댑터를 반환한다.

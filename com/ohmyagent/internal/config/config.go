@@ -33,6 +33,7 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 // Config 는 애플리케이션 전역 설정이다.
 type Config struct {
 	Env      string         // APP_ENV 에서 주입(yaml 아님)
+	resetDB  bool           // APP_DB_RESET 에서 주입(yaml 아님). DB 파괴적 초기화 옵트인.
 	Server   ServerConfig   `yaml:"server"`
 	Security SecurityConfig `yaml:"security"`
 	Database DatabaseConfig `yaml:"database"`
@@ -82,10 +83,10 @@ func (c *Config) SeedsInitialAdmin() bool {
 }
 
 // ResetsDatabase 는 기동 시 DB 를 파괴적으로 초기화(drop & create)할지 판정한다.
-// 로컬 개발 편의(매 기동마다 깨끗한 스키마 + 시드 재생성)를 위해 local 에서만 true.
-// dev/docker/prod 는 데이터를 보존한다.
+// 기본은 false(데이터 보존). 환경변수 APP_DB_RESET=1(true/yes/on)로 명시적으로 옵트인할 때만
+// 동작하며, 운영(prod)에서는 옵트인하더라도 절대 초기화하지 않는다(데이터 보호).
 func (c *Config) ResetsDatabase() bool {
-	return c.Env == "local"
+	return c.resetDB && !c.isProduction()
 }
 
 // isProduction 은 운영 환경 여부를 반환한다(jwt_secret 필수 검증용).
@@ -145,6 +146,10 @@ func (c *Config) injectSecrets() {
 	}
 	if v := os.Getenv("APP_AUTH_SEED_ADMIN_PASSWORD"); v != "" {
 		c.Auth.SeedAdminPassword = v
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_DB_RESET"))) {
+	case "1", "true", "yes", "on":
+		c.resetDB = true
 	}
 }
 

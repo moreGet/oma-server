@@ -139,7 +139,6 @@ func ErrForbidden(msg string) *AppError    { return &AppError{Code: CodeForbidde
 func ErrNotFound(msg string) *AppError     { return &AppError{Code: CodeNotFound, Message: msg} }
 func ErrConflict(msg string) *AppError     { return &AppError{Code: CodeConflict, Message: msg} }
 func ErrBadGateway(msg string) *AppError   { return &AppError{Code: CodeBadGateway, Message: msg} }
-func ErrInternal(msg string) *AppError     { return &AppError{Code: CodeInternal, Message: msg} }
 
 // toAppError 는 임의 에러를 AppError 로 변환한다. AppError 가 아니면 500 으로 폴백한다.
 func toAppError(err error) *AppError {

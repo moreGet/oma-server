@@ -89,9 +89,6 @@ func (s *fakeAuthService) RequireActiveMember(ctx context.Context, actorID strin
 	return domainauth.Member{}, nil
 }
 func (s *fakeAuthService) RequireAdmin(ctx context.Context, actorID string) error { return nil }
-func (s *fakeAuthService) EnsureProjectAccess(ctx context.Context, actorID string, projectID int) error {
-	return nil
-}
 
 // ---------------------------------------------------------------------------
 // helpers: build a SecureRouter so claims land in context, and a valid token.

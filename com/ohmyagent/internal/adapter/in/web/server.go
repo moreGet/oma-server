@@ -22,6 +22,8 @@ const (
 	sessionCookie = "admin_session"
 	flashCookie   = "admin_flash"
 	basePath      = "/admin"
+	// flashTTLSeconds: 플래시 메시지 쿠키의 수명(초). 다음 페이지 1회 노출용.
+	flashTTLSeconds = 10
 )
 
 // Server 는 어드민 웹 어댑터다. use case 를 직접 호출한다.
@@ -124,7 +126,7 @@ func (s *Server) clearSession(w http.ResponseWriter) {
 }
 
 func (s *Server) setFlash(w http.ResponseWriter, msg string) {
-	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: msg, Path: basePath, MaxAge: 10, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: msg, Path: basePath, MaxAge: flashTTLSeconds, SameSite: http.SameSiteLaxMode})
 }
 
 func (s *Server) popFlash(w http.ResponseWriter, r *http.Request) string {
