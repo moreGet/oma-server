@@ -27,6 +27,12 @@
       display:flex; align-items:center; gap:.65rem; }
     .avatar { width:38px; height:38px; border-radius:50%; flex:0 0 auto; color:#fff; font-weight:700;
       background:linear-gradient(135deg,#6366f1,#8b5cf6); display:grid; place-items:center; }
+    .sidebar-foot form { margin:0; }
+    .foot-btn { width:34px; height:34px; border-radius:8px; flex:0 0 auto; display:grid; place-items:center;
+      color:var(--bs-secondary-color); border:1px solid var(--bs-border-color); background:transparent;
+      text-decoration:none; cursor:pointer; padding:0; font-size:1rem; }
+    .foot-btn:hover { color:var(--bs-body-color); background:var(--bs-tertiary-bg); }
+    .foot-btn.active { color:#fff; background:#6366f1; border-color:#6366f1; }
     .main { flex:1; min-width:0; display:flex; flex-direction:column; }
     .topbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; justify-content:space-between;
       gap:1rem; padding:.95rem 1.6rem; background:rgba(15,17,23,.85); backdrop-filter:blur(10px);
@@ -52,7 +58,7 @@
       .app { flex-direction:column; }
       .sidebar { width:100%; flex:none; height:auto; position:static; }
       .sidebar .nav { flex-direction:row !important; flex-wrap:wrap; }
-      .nav-label, .sidebar-foot { display:none; }
+      .nav-label { display:none; }
     }
   </style>
 </head>
@@ -76,29 +82,23 @@
         <li class="nav-item">
           <a class="nav-link {{if eq .Active "providers"}}active{{end}}" href="/admin/providers"><i class="bi bi-hdd-stack"></i> Provider</a>
         </li>
-        <li class="nav-label">계정</li>
-        <li class="nav-item">
-          <a class="nav-link {{if eq .Active "account"}}active{{end}}" href="/admin/account"><i class="bi bi-person-gear"></i> 내 계정</a>
-        </li>
       </ul>
       <div class="sidebar-foot">
         <span class="avatar"><i class="bi bi-person-fill"></i></span>
-        <div class="text-truncate">
+        <div class="text-truncate flex-grow-1">
           <div class="fw-semibold text-truncate">{{.User.Username}}</div>
           <small class="text-secondary">{{.User.Role}}</small>
         </div>
+        <a href="/admin/account" class="foot-btn {{if eq .Active "account"}}active{{end}}" title="내 계정" aria-label="내 계정"><i class="bi bi-gear"></i></a>
+        <form method="post" action="/admin/logout">
+          <button type="submit" class="foot-btn" title="로그아웃" aria-label="로그아웃"><i class="bi bi-box-arrow-right"></i></button>
+        </form>
       </div>
     </aside>
 
     <div class="main">
       <header class="topbar">
         <h1>{{.Title}}</h1>
-        <div class="d-flex align-items-center gap-3">
-          <span class="badge rounded-pill badge-{{.User.Role}}">{{.User.Role}}</span>
-          <form method="post" action="/admin/logout" class="m-0">
-            <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-box-arrow-right"></i> 로그아웃</button>
-          </form>
-        </div>
       </header>
       <main class="content">
         {{template "content" .}}
