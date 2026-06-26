@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/base64"
 	"html/template"
@@ -13,7 +14,35 @@ import (
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
+	domainproject "aiagent/com/ohmyagent/internal/domain/project"
+	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
+
+// sessionManager 는 어드민 세션(대화) 저장 설정·캡 관리 인터페이스다(*sessionapp.Manager 가 충족).
+type sessionManager interface {
+	GetSettings(ctx context.Context, actorID string) (domainproject.Settings, bool, error)
+	UpdateSettings(ctx context.Context, cmd domainproject.UpdateSettingsCommand) error
+	TestConnection(ctx context.Context, actorID string) error
+	SetMemberLimit(ctx context.Context, actorID, memberID string, max int) error
+	MemberLimits(ctx context.Context) (map[string]int, error)
+	DefaultMaxSessions() int
+}
+
+// transcriptManager 는 어드민 대화이력 설정 화면이 사용하는 소비자 인터페이스다(*transcriptapp.Manager 가 충족).
+type transcriptManager interface {
+	GetSettings(ctx context.Context, actorID string) (domaintranscript.Settings, bool, error)
+	UpdateSettings(ctx context.Context, cmd domaintranscript.UpdateCommand) error
+	TestConnection(ctx context.Context, actorID string) error
+}
+
+// quotaManager 는 어드민 토큰 한도 관리가 사용하는 소비자 인터페이스다(*quotaapp.Service 가 충족).
+type quotaManager interface {
+	Snapshot(ctx context.Context) (domainquota.Snapshot, error)
+	SetDefaultLimits(ctx context.Context, actorID string, l domainquota.Limits) error
+	SetMemberLimits(ctx context.Context, actorID, memberID string, l domainquota.Limits) error
+	ResetUsage(ctx context.Context, actorID, memberID string) error
+}
 
 //go:embed templates/*.html
 var templatesFS embed.FS
@@ -28,31 +57,37 @@ const (
 
 // Server 는 어드민 웹 어댑터다. use case 를 직접 호출한다.
 type Server struct {
-	auth      domainauth.Service
-	providers domainllmprovider.Service
-	tokens    domainauth.TokenService
-	cookieTTL time.Duration
-	secure    bool // 운영(prod)에서 Secure 쿠키 플래그
-	login     *template.Template
-	pages     map[string]*template.Template
+	auth        domainauth.Service
+	providers   domainllmprovider.Service
+	transcripts transcriptManager
+	quota       quotaManager
+	sessions    sessionManager
+	tokens      domainauth.TokenService
+	cookieTTL   time.Duration
+	secure      bool // 운영(prod)에서 Secure 쿠키 플래그
+	login       *template.Template
+	pages       map[string]*template.Template
 }
 
 // NewServer 는 어드민 웹 서버를 생성하고 템플릿을 파싱한다.
-func NewServer(auth domainauth.Service, providers domainllmprovider.Service, tokens domainauth.TokenService, cookieTTL time.Duration, secure bool) *Server {
+func NewServer(auth domainauth.Service, providers domainllmprovider.Service, transcripts transcriptManager, quota quotaManager, sessions sessionManager, tokens domainauth.TokenService, cookieTTL time.Duration, secure bool) *Server {
 	return &Server{
-		auth:      auth,
-		providers: providers,
-		tokens:    tokens,
-		cookieTTL: cookieTTL,
-		secure:    secure,
-		login:     template.Must(template.ParseFS(templatesFS, "templates/login.html")),
-		pages:     parsePages(),
+		auth:        auth,
+		providers:   providers,
+		transcripts: transcripts,
+		quota:       quota,
+		sessions:    sessions,
+		tokens:      tokens,
+		cookieTTL:   cookieTTL,
+		secure:      secure,
+		login:       template.Must(template.ParseFS(templatesFS, "templates/login.html")),
+		pages:       parsePages(),
 	}
 }
 
 // parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다.
 func parsePages() map[string]*template.Template {
-	names := []string{"dashboard", "members", "providers", "account"}
+	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
 		out[n] = template.Must(template.ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
@@ -74,8 +109,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+basePath+"/members", s.authed(s.membersCreate))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/role", s.authed(s.memberChangeRole))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/active", s.authed(s.memberToggleActive))
+	mux.HandleFunc("POST "+basePath+"/members/{id}/profile", s.authed(s.memberUpdateProfile))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/password", s.authed(s.memberResetPassword))
+	mux.HandleFunc("POST "+basePath+"/members/{id}/token-limit", s.authed(s.memberSetTokenLimit))
+	mux.HandleFunc("POST "+basePath+"/members/{id}/quota-reset", s.authed(s.memberResetQuota))
+	mux.HandleFunc("POST "+basePath+"/members/{id}/session-limit", s.authed(s.memberSetSessionLimit))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/delete", s.authed(s.memberDelete))
+	mux.HandleFunc("POST "+basePath+"/quota/default", s.authed(s.quotaSetDefault))
 
 	mux.HandleFunc("GET "+basePath+"/providers", s.authed(s.providersPage))
 	mux.HandleFunc("POST "+basePath+"/providers", s.authed(s.providerCreate))
@@ -85,7 +125,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+basePath+"/providers/{id}/delete", s.authed(s.providerDelete))
 
 	mux.HandleFunc("GET "+basePath+"/account", s.authed(s.accountPage))
-	mux.HandleFunc("POST "+basePath+"/account/password", s.authed(s.accountChangePassword))
+
+	mux.HandleFunc("GET "+basePath+"/transcripts", s.authed(s.transcriptsPage))
+	mux.HandleFunc("POST "+basePath+"/transcripts", s.authed(s.transcriptsUpdate))
+	mux.HandleFunc("POST "+basePath+"/transcripts/test", s.authed(s.transcriptsTest))
+
+	mux.HandleFunc("GET "+basePath+"/sessions", s.authed(s.sessionsPage))
+	mux.HandleFunc("POST "+basePath+"/sessions", s.authed(s.sessionsUpdate))
+	mux.HandleFunc("POST "+basePath+"/sessions/test", s.authed(s.sessionsTest))
 }
 
 // authed 는 쿠키의 JWT 를 검증하고 claims 를 context 에 주입한다. 실패 시 로그인으로 리다이렉트.

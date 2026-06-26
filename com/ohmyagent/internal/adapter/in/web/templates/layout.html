@@ -82,6 +82,14 @@
         <li class="nav-item">
           <a class="nav-link {{if eq .Active "providers"}}active{{end}}" href="/admin/providers"><i class="bi bi-hdd-stack"></i> Provider</a>
         </li>
+        {{if .CanManage}}
+        <li class="nav-item">
+          <a class="nav-link {{if eq .Active "transcripts"}}active{{end}}" href="/admin/transcripts"><i class="bi bi-clock-history"></i> 대화 이력</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {{if eq .Active "sessions"}}active{{end}}" href="/admin/sessions"><i class="bi bi-folder2-open"></i> 세션 저장</a>
+        </li>
+        {{end}}
       </ul>
       <div class="sidebar-foot">
         <span class="avatar"><i class="bi bi-person-fill"></i></span>

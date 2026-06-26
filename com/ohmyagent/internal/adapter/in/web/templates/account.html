@@ -16,20 +16,21 @@
   </div>
 </div>
 
-<div class="card" style="max-width:32rem">
-  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-key me-1"></i> 비밀번호 변경</div>
+{{if .Data}}
+<div class="card" style="max-width:36rem">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-person-vcard me-1"></i> 프로필</div>
   <div class="card-body">
-    <form method="post" action="/admin/account/password">
-      <div class="mb-3">
-        <label class="form-label small text-secondary">현재 비밀번호</label>
-        <input type="password" name="old_password" class="form-control" autocomplete="current-password" required>
+    <form method="post" action="/admin/members/{{.Data.ID}}/profile" class="vstack gap-2">
+      <div class="row g-2">
+        <div class="col-md-6"><label class="form-label small text-secondary mb-1">표시명</label><input type="text" name="display_name" class="form-control" value="{{.Data.DisplayName}}" placeholder="예: 김성현"></div>
+        <div class="col-md-6"><label class="form-label small text-secondary mb-1">소속</label><input type="text" name="organization" class="form-control" value="{{.Data.Organization}}" placeholder="예: 플랫폼개발팀"></div>
+        <div class="col-12"><label class="form-label small text-secondary mb-1">이메일</label><input type="email" name="email" class="form-control" value="{{.Data.Email}}" placeholder="user@company.com"></div>
       </div>
-      <div class="mb-3">
-        <label class="form-label small text-secondary">새 비밀번호 (8자 이상)</label>
-        <input type="password" name="new_password" class="form-control" autocomplete="new-password" minlength="8" required>
-      </div>
-      <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 변경</button>
+      <div><button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 프로필 저장</button></div>
     </form>
   </div>
 </div>
+{{end}}
+
+<p class="text-secondary small mt-3 mb-0"><i class="bi bi-info-circle me-1"></i>비밀번호 변경은 <a href="/admin/members">멤버 관리</a>에서 처리합니다.</p>
 {{end}}

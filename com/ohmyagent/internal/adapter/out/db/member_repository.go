@@ -28,21 +28,35 @@ func NewMemberRepository(conn *sql.DB) *MemberRepository {
 const memberSelect = `SELECT
     m.id, m.username, m.password_hash, m.active,
     r.id, r.name, r.level,
-    m.created_at, m.updated_at, m.created_by, m.updated_by
+    m.created_at, m.updated_at, m.created_by, m.updated_by,
+    m.email, m.display_name, m.organization
 FROM members m
 JOIN roles r ON r.id = m.role_id`
 
 // Save 는 새 멤버를 INSERT 한다.
 func (r *MemberRepository) Save(ctx context.Context, m domainauth.Member) error {
 	_, err := r.db.ExecContext(ctx,
-		"INSERT INTO members (id, username, password_hash, active, role_id, created_at, updated_at, created_by, updated_by) VALUES (?,?,?,?,?,?,?,?,?)",
+		"INSERT INTO members (id, username, password_hash, active, role_id, created_at, updated_at, created_by, updated_by, email, display_name, organization) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
 		m.ID, m.Username, m.PasswordHash, m.Active, m.Role.ID,
 		m.CreatedAt.Unix(), m.UpdatedAt.Unix(), nullString(m.CreatedBy), nullString(m.UpdatedBy),
+		nullString(m.Email), nullString(m.DisplayName), nullString(m.Organization),
 	)
 	if err != nil {
 		return fmt.Errorf("save member: %w", err)
 	}
 	return nil
+}
+
+// UpdateProfile 은 프로필(email/display_name/organization) + audit 를 갱신한다. 0행 → domainauth.ErrNotFound.
+func (r *MemberRepository) UpdateProfile(ctx context.Context, id, email, displayName, organization string, updatedAt int64, updatedBy string) error {
+	res, err := r.db.ExecContext(ctx,
+		"UPDATE members SET email=?, display_name=?, organization=?, updated_at=?, updated_by=? WHERE id=?",
+		nullString(email), nullString(displayName), nullString(organization), updatedAt, nullString(updatedBy), id,
+	)
+	if err != nil {
+		return fmt.Errorf("update profile id=%s: %w", id, err)
+	}
+	return checkMemberAffected(res)
 }
 
 // Update 는 role/active/audit 필드를 갱신한다. 0행 → domainauth.ErrNotFound.
@@ -153,17 +167,21 @@ func (r *MemberRepository) Delete(ctx context.Context, id string) error {
 // memberSelect 의 컬럼 순서와 정확히 일치해야 한다.
 func scanMember(s rowScanner) (domainauth.Member, error) {
 	var (
-		m         domainauth.Member
-		level     int
-		createdAt int64
-		updatedAt int64
-		createdBy sql.NullString
-		updatedBy sql.NullString
+		m            domainauth.Member
+		level        int
+		createdAt    int64
+		updatedAt    int64
+		createdBy    sql.NullString
+		updatedBy    sql.NullString
+		email        sql.NullString
+		displayName  sql.NullString
+		organization sql.NullString
 	)
 	if err := s.Scan(
 		&m.ID, &m.Username, &m.PasswordHash, &m.Active,
 		&m.Role.ID, &m.Role.Name, &level,
 		&createdAt, &updatedAt, &createdBy, &updatedBy,
+		&email, &displayName, &organization,
 	); err != nil {
 		return domainauth.Member{}, err
 	}
@@ -172,6 +190,9 @@ func scanMember(s rowScanner) (domainauth.Member, error) {
 	m.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	m.CreatedBy = strFromNull(createdBy)
 	m.UpdatedBy = strFromNull(updatedBy)
+	m.Email = strFromNull(email)
+	m.DisplayName = strFromNull(displayName)
+	m.Organization = strFromNull(organization)
 	return m, nil
 }
 

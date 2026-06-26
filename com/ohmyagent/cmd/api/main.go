@@ -24,11 +24,17 @@ import (
 	cryptoout "aiagent/com/ohmyagent/internal/adapter/out/crypto"
 	dbout "aiagent/com/ohmyagent/internal/adapter/out/db"
 	llmout "aiagent/com/ohmyagent/internal/adapter/out/llm"
+	sessionstore "aiagent/com/ohmyagent/internal/adapter/out/sessionstore"
+	transcriptout "aiagent/com/ohmyagent/internal/adapter/out/transcript"
 	agentapp "aiagent/com/ohmyagent/internal/application/agent"
 	authapp "aiagent/com/ohmyagent/internal/application/auth"
 	chatapp "aiagent/com/ohmyagent/internal/application/chat"
 	chatsessionapp "aiagent/com/ohmyagent/internal/application/chatsession"
 	llmproviderapp "aiagent/com/ohmyagent/internal/application/llmprovider"
+	projectapp "aiagent/com/ohmyagent/internal/application/project"
+	quotaapp "aiagent/com/ohmyagent/internal/application/quota"
+	sessionapp "aiagent/com/ohmyagent/internal/application/session"
+	transcriptapp "aiagent/com/ohmyagent/internal/application/transcript"
 	"aiagent/com/ohmyagent/internal/config"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -46,6 +52,10 @@ const (
 	seedPasswordBytes = 16
 	// defaultSeedAdminUsername: 시드 admin 사용자명 미설정 시 기본값.
 	defaultSeedAdminUsername = "admin"
+	// transcriptBufferSize: 대화 이력 비동기 기록 버퍼. 초과분은 드롭(백프레셔).
+	transcriptBufferSize = 4096
+	// transcriptPurgeInterval: 대화 이력 보존 정책(TTL) purge 주기.
+	transcriptPurgeInterval = 6 * time.Hour
 	// idleTimeout: keep-alive 유휴 커넥션 한도(고동접에서 커넥션 재활용·정리).
 	idleTimeout = 120 * time.Second
 	// readHeaderTimeout: 요청 헤더 수신 한도(slowloris 완화).
@@ -66,6 +76,7 @@ func run() error {
 		return err
 	}
 	log := logger.Init(logger.Options{Level: "info", Format: "json"})
+	defer logger.Shutdown() // 종료 시 비동기 로그 버퍼 플러시(가장 마지막에 실행)
 	log.Info("starting server", "env", cfg.Env, "addr", cfg.ServerAddr())
 
 	// 2) DB + 마이그레이션
@@ -96,10 +107,30 @@ func run() error {
 	tokenSvc := security.NewJWTTokenService(cfg.Auth.JWTSecret, cfg.Auth.JWTExpiry.Std())
 	providerCache := llmout.NewCache()
 	providerFactory := llmout.NewFactory()
-	providerCipher := cryptoout.NewAESGCMCipher(cfg.Security.EncryptionSecret) // API 키 암복호화(AES-GCM)
+	providerCipher := cryptoout.NewAESGCMCipher(cfg.Security.EncryptionSecret) // API 키/대화이력 시크릿 암복호화(AES-GCM)
+	// 대화 이력 저장: DB gzip BLOB 기본 + 어드민 선택형 백엔드(file/S3). recorder 는 아래(authUC 이후)에서 생성.
+	transcriptDBStore := dbout.NewTranscriptStore(conn)
+	transcriptSettingsRepo := dbout.NewTranscriptSettingsRepository(conn)
+	transcriptFactory := transcriptout.NewStoreFactory(transcriptDBStore, providerCipher)
 
 	// 4) 유스케이스(auth → provider 에 accessGate 주입)
 	authUC := authapp.NewAuthUseCase(memberRepo, roleRepo, hasher, tokenSvc)
+	// 대화 이력 매니저(설정 로드 + 활성 백엔드 구성) + 비차단 recorder(꺼져 있으면 기록 생략).
+	transcriptManager, err := transcriptapp.NewManager(transcriptSettingsRepo, transcriptFactory, providerCipher, authUC)
+	if err != nil {
+		return err
+	}
+	transcriptRecorder := transcriptout.NewAsyncRecorder(transcriptManager, transcriptManager.Enabled, transcriptBufferSize)
+	defer transcriptRecorder.Close() // 종료 시 잔여 이력 플러시
+	// 토큰 쿼터(월간 사용 한도). 카운터/한도 모두 DB → 다중 인스턴스(LB) 정확.
+	quotaService := quotaapp.NewService(dbout.NewQuotaRepository(conn, cfg.Database.Driver), authUC)
+	// 프로젝트/대화 동기화: 메타데이터 DB + 본문 선택형 백엔드(DB/파일/S3) + 계정별 세션 캡.
+	sessionFactory := sessionstore.NewStoreFactory(dbout.NewSessionBlobStore(conn), providerCipher)
+	sessionManager, err := sessionapp.NewManager(dbout.NewSessionSettingsRepository(conn), dbout.NewMemberSessionLimitRepository(conn), sessionFactory, providerCipher, authUC)
+	if err != nil {
+		return err
+	}
+	projectService := projectapp.NewService(dbout.NewProjectRepository(conn), dbout.NewConversationRepository(conn), sessionManager, sessionManager.EffectiveMaxSessions)
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
 	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
 	agentUC := agentapp.NewAgentService(providerUC) // 에이전트 루프(tools/function-calling) 중계
@@ -116,14 +147,16 @@ func run() error {
 	// 6) 핸들러
 	authH := httpin.NewAuthHandler(authUC)
 	provH := httpin.NewProviderHandler(providerUC)
-	chatH := httpin.NewChatHandler(chatUC)
-	agentH := httpin.NewAgentHandler(agentUC)
+	chatH := httpin.NewChatHandler(chatUC, transcriptRecorder, quotaService)
+	agentH := httpin.NewAgentHandler(agentUC, transcriptRecorder, transcriptManager.StripAttachments, quotaService)
 	healthH := httpin.NewHealthHandler(conn)
 	modelsH := httpin.NewModelsHandler(providerUC)
 	suggestionH := httpin.NewSuggestionHandler()
 	sessionH := httpin.NewSessionHandler(sessionUC)
 	statsH := httpin.NewStatsHandler(authUC, providerUC)
-	webServer := web.NewServer(authUC, providerUC, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
+	quotaH := httpin.NewQuotaHandler(quotaService)
+	projectH := httpin.NewProjectHandler(projectService)
+	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
 	// 7) 라우트 등록(설계 §7)
 	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
@@ -133,6 +166,8 @@ func run() error {
 	// 본인 정보·비밀번호·역할목록(인증된 사용자)
 	router.Secured("GET /api/v1/me", httpin.Handle(authH.Me), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("PUT /api/v1/me/password", httpin.Handle(authH.ChangePassword), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/me/quota", httpin.Handle(quotaH.Me), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/users/me", httpin.HandleAgent(authH.Profile), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/roles", httpin.Handle(authH.ListRoles), security.MinRole(domainauth.RoleLevelUser))
 
 	router.Secured("GET /api/v1/members", httpin.Handle(authH.ListMembers), security.MinRole(domainauth.RoleLevelAdmin))
@@ -173,6 +208,14 @@ func run() error {
 	router.Secured("PUT /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Upsert), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("DELETE /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Delete), security.MinRole(domainauth.RoleLevelUser))
 
+	// 프로젝트/대화 동기화(클라 로컬 우선 → 서버 동기화, 소유권 스코프, 중첩 envelope).
+	router.Secured("GET /api/v1/projects", httpin.HandleAgent(projectH.List), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/projects", httpin.HandleAgent(projectH.Upsert), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/projects/{id}", httpin.HandleAgent(projectH.Get), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/projects/{id}", httpin.HandleAgent(projectH.Delete), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/projects/{id}/conversations", httpin.HandleAgent(projectH.UpsertConversation), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/projects/{id}/conversations/{cid}", httpin.HandleAgent(projectH.DeleteConversation), security.MinRole(domainauth.RoleLevelUser))
+
 	// 어드민 웹 페이지(htmx + html/template, 쿠키 인증) 마운트: /admin
 	webServer.Register(router.Mux())
 
@@ -190,6 +233,9 @@ func run() error {
 	// 9) graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// 대화 이력 보존(TTL) purge 백그라운드 잡(종료 시 ctx 로 정리).
+	go transcriptManager.RunPurge(ctx, transcriptPurgeInterval)
 
 	errCh := make(chan error, 1)
 	go func() {

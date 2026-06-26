@@ -94,6 +94,15 @@ func (r *fakeMemberRepo) UpdatePassword(ctx context.Context, id, passwordHash st
 	return domainauth.ErrNotFound
 }
 
+func (r *fakeMemberRepo) UpdateProfile(ctx context.Context, id, email, displayName, organization string, updatedAt int64, updatedBy string) error {
+	if m, ok := r.byID[id]; ok {
+		m.Email, m.DisplayName, m.Organization = email, displayName, organization
+		r.add(m)
+		return nil
+	}
+	return domainauth.ErrNotFound
+}
+
 // fakeRoleRepo implements domainauth.RoleRepository.
 type fakeRoleRepo struct{}
 
@@ -329,6 +338,45 @@ func TestAuthUseCase_CreateMember(t *testing.T) {
 // ---------------------------------------------------------------------------
 // ChangeRole / SetActive / Delete — CanControl authorization
 // ---------------------------------------------------------------------------
+
+func TestAuthUseCase_UpdateProfile(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("self can update own profile", func(t *testing.T) {
+		repo := newFakeMemberRepo()
+		repo.add(member("u1", "bob", 1, true))
+		uc := NewAuthUseCase(repo, &fakeRoleRepo{}, &fakeHasher{}, &fakeTokenService{})
+
+		m, err := uc.UpdateProfile(ctx, domainauth.UpdateProfileCommand{
+			ActorID: "u1", TargetID: "u1", DisplayName: "Bob Kim", Organization: "Platform", Email: "bob@x.com",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "Bob Kim", m.DisplayName)
+		assert.Equal(t, "Platform", m.Organization)
+		assert.Equal(t, "bob@x.com", m.Email)
+	})
+
+	t.Run("admin can update lower member", func(t *testing.T) {
+		repo := newFakeMemberRepo()
+		repo.add(member("admin", "admin", 2, true))
+		repo.add(member("u1", "bob", 1, true))
+		uc := NewAuthUseCase(repo, &fakeRoleRepo{}, &fakeHasher{}, &fakeTokenService{})
+
+		m, err := uc.UpdateProfile(ctx, domainauth.UpdateProfileCommand{ActorID: "admin", TargetID: "u1", DisplayName: "X"})
+		require.NoError(t, err)
+		assert.Equal(t, "X", m.DisplayName)
+	})
+
+	t.Run("peer cannot update another's profile", func(t *testing.T) {
+		repo := newFakeMemberRepo()
+		repo.add(member("a", "a", 1, true))
+		repo.add(member("b", "b", 1, true))
+		uc := NewAuthUseCase(repo, &fakeRoleRepo{}, &fakeHasher{}, &fakeTokenService{})
+
+		_, err := uc.UpdateProfile(ctx, domainauth.UpdateProfileCommand{ActorID: "a", TargetID: "b", DisplayName: "X"})
+		assert.ErrorIs(t, err, domainauth.ErrPermission)
+	})
+}
 
 func TestAuthUseCase_ChangeRole(t *testing.T) {
 	ctx := context.Background()

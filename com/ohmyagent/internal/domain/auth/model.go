@@ -67,10 +67,21 @@ type Member struct {
 	PasswordHash string // bcrypt; 응답 DTO 노출 금지
 	Active       bool
 	Role         Role
+	Email        string // 선택(프로필)
+	DisplayName  string // 선택(표시명; 없으면 username 폴백)
+	Organization string // 선택(소속)
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	CreatedBy    string // "" = 시스템
 	UpdatedBy    string
+}
+
+// DisplayLabel 은 표시명을 반환한다(없으면 username 폴백).
+func (m Member) DisplayLabel() string {
+	if m.DisplayName != "" {
+		return m.DisplayName
+	}
+	return m.Username
 }
 
 // --- JWT 클레임(§4.6) ---
@@ -92,10 +103,22 @@ type LoginCommand struct {
 
 // CreateMemberCommand 는 멤버 생성 입력이다.
 type CreateMemberCommand struct {
-	Username string
-	Password string
-	RoleID   int
-	ActorID  string
+	Username     string
+	Password     string
+	RoleID       int
+	ActorID      string
+	Email        string // 선택
+	DisplayName  string // 선택
+	Organization string // 선택
+}
+
+// UpdateProfileCommand 는 멤버 프로필(표시명/소속/이메일) 변경 입력이다.
+type UpdateProfileCommand struct {
+	ActorID      string
+	TargetID     string
+	Email        string
+	DisplayName  string
+	Organization string
 }
 
 // ChangeRoleCommand 는 멤버 역할 변경 입력이다.

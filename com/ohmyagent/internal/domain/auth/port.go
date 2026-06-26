@@ -11,6 +11,7 @@ type Service interface {
 	ListMembers(ctx context.Context, actorID string, filter MemberFilter) ([]Member, int, error)
 	GetMember(ctx context.Context, actorID, targetID string) (Member, error)
 	CreateMember(ctx context.Context, cmd CreateMemberCommand) (Member, error)
+	UpdateProfile(ctx context.Context, cmd UpdateProfileCommand) (Member, error) // 본인 또는 CanControl 하위 멤버 프로필 변경
 	ChangeRole(ctx context.Context, cmd ChangeRoleCommand) (Member, error)
 	SetActive(ctx context.Context, cmd SetActiveCommand) (Member, error)
 	DeleteMember(ctx context.Context, actorID, targetID string) error
@@ -27,13 +28,14 @@ type Service interface {
 
 // Repository — out 포트(멤버 영속화).
 type Repository interface {
-	Save(ctx context.Context, m Member) error                                                             // INSERT
-	Update(ctx context.Context, m Member) error                                                           // UPDATE(role/active/audit)
-	FindByID(ctx context.Context, id string) (Member, error)                                              // 없으면 ErrNotFound
-	FindByUsername(ctx context.Context, username string) (Member, error)                                  // 없으면 ErrNotFound
-	List(ctx context.Context, filter MemberFilter) ([]Member, int, error)                                 // total 포함
-	Delete(ctx context.Context, id string) error                                                          // 0행 → ErrNotFound
-	UpdatePassword(ctx context.Context, id, passwordHash string, updatedAt int64, updatedBy string) error // 0행 → ErrNotFound
+	Save(ctx context.Context, m Member) error                                                                                // INSERT
+	Update(ctx context.Context, m Member) error                                                                              // UPDATE(role/active/audit)
+	FindByID(ctx context.Context, id string) (Member, error)                                                                 // 없으면 ErrNotFound
+	FindByUsername(ctx context.Context, username string) (Member, error)                                                     // 없으면 ErrNotFound
+	List(ctx context.Context, filter MemberFilter) ([]Member, int, error)                                                    // total 포함
+	Delete(ctx context.Context, id string) error                                                                             // 0행 → ErrNotFound
+	UpdatePassword(ctx context.Context, id, passwordHash string, updatedAt int64, updatedBy string) error                    // 0행 → ErrNotFound
+	UpdateProfile(ctx context.Context, id, email, displayName, organization string, updatedAt int64, updatedBy string) error // 0행 → ErrNotFound
 }
 
 // RoleRepository — out 포트(마스터데이터 roles).

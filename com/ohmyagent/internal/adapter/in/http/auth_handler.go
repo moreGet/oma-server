@@ -161,6 +161,40 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// --- GET /api/v1/users/me (클라이언트 프로필 카드, 중첩 에러 envelope) ---
+
+type userProfileResp struct {
+	Username     string  `json:"username"`
+	DisplayName  string  `json:"display_name"`
+	Organization *string `json:"organization"`
+	Email        *string `json:"email"`
+}
+
+// Profile 은 로그인 사용자 프로필을 반환한다(client 계약).
+// display_name 은 별도 표시명이 없으면 username 으로 폴백, organization/email 은 미보유 시 null.
+func (h *AuthHandler) Profile(w http.ResponseWriter, r *http.Request) error {
+	claims, _ := security.ClaimsFrom(r.Context())
+	member, err := h.svc.GetMember(r.Context(), claims.MemberID, claims.MemberID)
+	if err != nil {
+		return authErrToHTTP(err)
+	}
+	writeJSON(w, http.StatusOK, userProfileResp{
+		Username:     member.Username,
+		DisplayName:  member.DisplayLabel(),
+		Organization: strPtrOrNil(member.Organization),
+		Email:        strPtrOrNil(member.Email),
+	})
+	return nil
+}
+
+// strPtrOrNil 은 빈 문자열을 JSON null 로 직렬화하기 위해 nil 포인터를 반환한다.
+func strPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // --- PUT /api/v1/me/password ---
 
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) error {

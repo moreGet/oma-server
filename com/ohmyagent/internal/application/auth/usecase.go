@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -151,10 +152,13 @@ func (u *AuthUseCase) CreateMember(ctx context.Context, cmd domainauth.CreateMem
 			Name:  domainauth.NameForRoleID(cmd.RoleID),
 			Level: targetLevel,
 		},
-		CreatedAt: now,
-		UpdatedAt: now,
-		CreatedBy: cmd.ActorID,
-		UpdatedBy: cmd.ActorID,
+		Email:        strings.TrimSpace(cmd.Email),
+		DisplayName:  strings.TrimSpace(cmd.DisplayName),
+		Organization: strings.TrimSpace(cmd.Organization),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		CreatedBy:    cmd.ActorID,
+		UpdatedBy:    cmd.ActorID,
 	}
 	if err := u.members.Save(ctx, member); err != nil {
 		return domainauth.Member{}, err
@@ -162,6 +166,26 @@ func (u *AuthUseCase) CreateMember(ctx context.Context, cmd domainauth.CreateMem
 	slog.Info("member created", "event", "member.created",
 		"actor", cmd.ActorID, "member_id", member.ID, "username", member.Username, "role_id", member.Role.ID)
 	return member, nil
+}
+
+// UpdateProfile 은 멤버 프로필(표시명/소속/이메일)을 변경한다. 본인 또는 CanControl 하위 멤버만 가능.
+func (u *AuthUseCase) UpdateProfile(ctx context.Context, cmd domainauth.UpdateProfileCommand) (domainauth.Member, error) {
+	if cmd.ActorID != cmd.TargetID {
+		if _, _, err := u.requireControl(ctx, cmd.ActorID, cmd.TargetID); err != nil {
+			return domainauth.Member{}, err
+		}
+	} else if _, err := u.RequireActiveMember(ctx, cmd.ActorID); err != nil {
+		return domainauth.Member{}, err
+	}
+	now := u.now()
+	if err := u.members.UpdateProfile(ctx, cmd.TargetID,
+		strings.TrimSpace(cmd.Email), strings.TrimSpace(cmd.DisplayName), strings.TrimSpace(cmd.Organization),
+		now.Unix(), cmd.ActorID); err != nil {
+		return domainauth.Member{}, err
+	}
+	slog.Info("member profile updated", "event", "member.profile_updated",
+		"actor", cmd.ActorID, "member_id", cmd.TargetID)
+	return u.members.FindByID(ctx, cmd.TargetID)
 }
 
 // ChangeRole 은 멤버 역할을 변경한다. actor 는 admin↑ 이며 대상·신규역할 모두 제어 가능해야 한다.

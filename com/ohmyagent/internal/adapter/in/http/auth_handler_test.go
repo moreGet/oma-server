@@ -60,6 +60,11 @@ func (s *fakeAuthService) CreateMember(ctx context.Context, cmd domainauth.Creat
 	return s.createMember, s.createMemberErr
 }
 
+func (s *fakeAuthService) UpdateProfile(ctx context.Context, cmd domainauth.UpdateProfileCommand) (domainauth.Member, error) {
+	s.lastActorID = cmd.ActorID
+	return s.getMember, s.getMemberErr
+}
+
 func (s *fakeAuthService) ChangeRole(ctx context.Context, cmd domainauth.ChangeRoleCommand) (domainauth.Member, error) {
 	s.lastActorID = cmd.ActorID
 	return s.getMember, s.getMemberErr

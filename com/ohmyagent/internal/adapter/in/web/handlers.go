@@ -10,6 +10,9 @@ import (
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
+	domainproject "aiagent/com/ohmyagent/internal/domain/project"
+	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
 
 // --- 뷰 데이터 ---
@@ -33,12 +36,35 @@ type pageData struct {
 }
 
 type memberView struct {
-	ID        string
-	Username  string
-	Role      string
-	Level     int
-	Active    bool
-	CreatedAt string
+	ID           string
+	Username     string
+	Role         string
+	Level        int
+	Active       bool
+	CreatedAt    string
+	Email        string
+	DisplayName  string
+	Organization string
+	// 토큰 한도(멤버 오버라이드, 0=전역 기본값) — 모달 입력용.
+	DailyLimit   int
+	WeeklyLimit  int
+	MonthlyLimit int
+	DailyUsed    int
+	WeeklyUsed   int
+	MonthlyUsed  int
+	// Quota 는 표시용 일/주/월 사용률(유효 한도 기준). 목록 진행바에 사용.
+	Quota []memberQuotaView
+	// SessionLimit 는 멤버별 최대 세션 수 오버라이드(0 = 전역 기본값).
+	SessionLimit int
+}
+
+// memberQuotaView 는 한 윈도우의 표시용 사용률이다(유효 한도 = 오버라이드>0 ? 오버라이드 : 전역 기본).
+type memberQuotaView struct {
+	Label     string // 일 | 주 | 월
+	Used      int
+	Limit     int // 유효 한도(0 = 무제한)
+	Unlimited bool
+	PctUsed   int // 0..100
 }
 
 type roleView struct {
@@ -74,6 +100,8 @@ type dashboardView struct {
 type membersView struct {
 	Members []memberView
 	Roles   []roleView
+	Default domainquota.Limits     // 전역 기본 한도(일·주·월, 0 = 무제한)
+	Keys    domainquota.PeriodKeys // 현재 기간 키(표시용)
 }
 
 type providersView struct {
@@ -196,7 +224,34 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 			controllable = append(controllable, role)
 		}
 	}
-	mv := membersView{Members: toMemberViews(members), Roles: toRoleViews(controllable)}
+	memberViews := toMemberViews(members)
+	mv := membersView{Members: memberViews, Roles: toRoleViews(controllable)}
+	// 토큰 쿼터: 전역 기본값 + 이번 일·주·월 멤버별 한도/사용량을 함께 표시한다.
+	if s.quota != nil {
+		if snap, err := s.quota.Snapshot(r.Context()); err == nil {
+			mv.Default = snap.Default
+			mv.Keys = snap.Keys
+			for i := range memberViews {
+				ov := snap.Limits[memberViews[i].ID]
+				use := snap.Usage[memberViews[i].ID]
+				memberViews[i].DailyLimit, memberViews[i].WeeklyLimit, memberViews[i].MonthlyLimit = ov.Daily, ov.Weekly, ov.Monthly
+				memberViews[i].DailyUsed, memberViews[i].WeeklyUsed, memberViews[i].MonthlyUsed = use.Daily, use.Weekly, use.Monthly
+				memberViews[i].Quota = []memberQuotaView{
+					quotaWin("일", ov.Daily, snap.Default.Daily, use.Daily),
+					quotaWin("주", ov.Weekly, snap.Default.Weekly, use.Weekly),
+					quotaWin("월", ov.Monthly, snap.Default.Monthly, use.Monthly),
+				}
+			}
+		}
+	}
+	// 멤버별 최대 세션 수 오버라이드(모달 입력용).
+	if s.sessions != nil {
+		if limits, err := s.sessions.MemberLimits(r.Context()); err == nil {
+			for i := range memberViews {
+				memberViews[i].SessionLimit = limits[memberViews[i].ID]
+			}
+		}
+	}
 	pd.Data = mv
 	s.render(w, "members", pd)
 }
@@ -205,10 +260,13 @@ func (s *Server) membersCreate(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	roleID, _ := strconv.Atoi(r.FormValue("role_id"))
 	_, err := s.auth.CreateMember(r.Context(), domainauth.CreateMemberCommand{
-		Username: r.FormValue("username"),
-		Password: r.FormValue("password"),
-		RoleID:   roleID,
-		ActorID:  actorID(r),
+		Username:     r.FormValue("username"),
+		Password:     r.FormValue("password"),
+		RoleID:       roleID,
+		ActorID:      actorID(r),
+		Email:        r.FormValue("email"),
+		DisplayName:  r.FormValue("display_name"),
+		Organization: r.FormValue("organization"),
 	})
 	s.flashResult(w, err, "멤버를 생성했습니다.")
 	s.redirect(w, r, basePath+"/members")
@@ -238,6 +296,19 @@ func (s *Server) memberToggleActive(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, basePath+"/members")
 }
 
+func (s *Server) memberUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	_, err := s.auth.UpdateProfile(r.Context(), domainauth.UpdateProfileCommand{
+		ActorID:      actorID(r),
+		TargetID:     r.PathValue("id"),
+		Email:        r.FormValue("email"),
+		DisplayName:  r.FormValue("display_name"),
+		Organization: r.FormValue("organization"),
+	})
+	s.flashResult(w, err, "프로필을 변경했습니다.")
+	s.redirect(w, r, basePath+"/members")
+}
+
 func (s *Server) memberResetPassword(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	err := s.auth.ResetPassword(r.Context(), actorID(r), r.PathValue("id"), r.FormValue("new_password"))
@@ -249,6 +320,51 @@ func (s *Server) memberDelete(w http.ResponseWriter, r *http.Request) {
 	err := s.auth.DeleteMember(r.Context(), actorID(r), r.PathValue("id"))
 	s.flashResult(w, err, "멤버를 삭제했습니다.")
 	s.redirect(w, r, basePath+"/members")
+}
+
+func (s *Server) memberSetTokenLimit(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	err := s.quota.SetMemberLimits(r.Context(), actorID(r), r.PathValue("id"), formLimits(r))
+	s.flashResult(w, err, "토큰 한도를 변경했습니다.")
+	s.redirect(w, r, basePath+"/members")
+}
+
+func (s *Server) quotaSetDefault(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	err := s.quota.SetDefaultLimits(r.Context(), actorID(r), formLimits(r))
+	s.flashResult(w, err, "전역 기본 토큰 한도를 변경했습니다.")
+	s.redirect(w, r, basePath+"/members")
+}
+
+// quotaWin 은 표시용 사용률 뷰를 만든다(유효 한도 = 오버라이드>0 ? 오버라이드 : 전역 기본).
+func quotaWin(label string, override, def, used int) memberQuotaView {
+	limit := override
+	if limit <= 0 {
+		limit = def
+	}
+	v := memberQuotaView{Label: label, Used: used, Limit: limit, Unlimited: limit <= 0}
+	if limit > 0 {
+		if pct := used * 100 / limit; pct > 100 {
+			v.PctUsed = 100
+		} else {
+			v.PctUsed = pct
+		}
+	}
+	return v
+}
+
+func (s *Server) memberResetQuota(w http.ResponseWriter, r *http.Request) {
+	err := s.quota.ResetUsage(r.Context(), actorID(r), r.PathValue("id"))
+	s.flashResult(w, err, "사용량을 초기화했습니다.")
+	s.redirect(w, r, basePath+"/members")
+}
+
+// formLimits 는 폼에서 일/주/월 한도를 읽는다(빈/비정상 값은 0).
+func formLimits(r *http.Request) domainquota.Limits {
+	d, _ := strconv.Atoi(r.FormValue("daily_limit"))
+	wk, _ := strconv.Atoi(r.FormValue("weekly_limit"))
+	m, _ := strconv.Atoi(r.FormValue("monthly_limit"))
+	return domainquota.Limits{Daily: d, Weekly: wk, Monthly: m}
 }
 
 // --- Provider 관리 ---
@@ -332,16 +448,153 @@ func (s *Server) providerDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- 내 계정 ---
 
+type accountView struct {
+	ID           string
+	Email        string
+	DisplayName  string
+	Organization string
+}
+
 func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "내 계정", "account")
+	if member, err := s.auth.GetMember(r.Context(), actorID(r), actorID(r)); err == nil {
+		pd.Data = accountView{ID: member.ID, Email: member.Email, DisplayName: member.DisplayName, Organization: member.Organization}
+	}
 	s.render(w, "account", pd)
 }
 
-func (s *Server) accountChangePassword(w http.ResponseWriter, r *http.Request) {
+// --- 대화 이력 저장 설정 ---
+
+type transcriptView struct {
+	Enabled          bool
+	Backend          string // db | file | s3
+	FileDir          string
+	S3Endpoint       string
+	S3Bucket         string
+	S3Region         string
+	S3AccessKey      string
+	S3UseSSL         bool
+	HasSecret        bool // S3 시크릿 저장 여부(마스킹 표시용)
+	RetentionDays    int
+	StripAttachments bool
+}
+
+func (s *Server) transcriptsPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "대화 이력 저장", "transcripts")
+	settings, hasSecret, err := s.transcripts.GetSettings(r.Context(), actorID(r))
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/")
+		return
+	}
+	pd.Data = transcriptView{
+		Enabled: settings.Enabled, Backend: string(settings.Backend), FileDir: settings.FileDir,
+		S3Endpoint: settings.S3Endpoint, S3Bucket: settings.S3Bucket, S3Region: settings.S3Region,
+		S3AccessKey: settings.S3AccessKey, S3UseSSL: settings.S3UseSSL, HasSecret: hasSecret,
+		RetentionDays: settings.RetentionDays, StripAttachments: settings.StripAttachments,
+	}
+	s.render(w, "transcripts", pd)
+}
+
+func (s *Server) transcriptsUpdate(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	err := s.auth.ChangePassword(r.Context(), actorID(r), r.FormValue("old_password"), r.FormValue("new_password"))
-	s.flashResult(w, err, "비밀번호를 변경했습니다.")
-	s.redirect(w, r, basePath+"/account")
+	retentionDays, _ := strconv.Atoi(r.FormValue("retention_days"))
+	err := s.transcripts.UpdateSettings(r.Context(), domaintranscript.UpdateCommand{
+		ActorID: actorID(r),
+		Settings: domaintranscript.Settings{
+			Enabled:          r.FormValue("enabled") == "on",
+			Backend:          domaintranscript.Backend(r.FormValue("backend")),
+			FileDir:          r.FormValue("file_dir"),
+			S3Endpoint:       r.FormValue("s3_endpoint"),
+			S3Bucket:         r.FormValue("s3_bucket"),
+			S3Region:         r.FormValue("s3_region"),
+			S3AccessKey:      r.FormValue("s3_access_key"),
+			S3SecretKey:      r.FormValue("s3_secret_key"),
+			S3UseSSL:         r.FormValue("s3_use_ssl") == "on",
+			RetentionDays:    retentionDays,
+			StripAttachments: r.FormValue("strip_attachments") == "on",
+		},
+	})
+	s.flashResult(w, err, "대화 이력 설정을 저장했습니다.")
+	s.redirect(w, r, basePath+"/transcripts")
+}
+
+func (s *Server) transcriptsTest(w http.ResponseWriter, r *http.Request) {
+	if err := s.transcripts.TestConnection(r.Context(), actorID(r)); err != nil {
+		s.setFlashError(w, "연결 테스트 실패: "+err.Error())
+	} else {
+		s.setFlash(w, "연결 테스트에 성공했습니다.")
+	}
+	s.redirect(w, r, basePath+"/transcripts")
+}
+
+// --- 세션(대화) 저장 설정 ---
+
+type sessionView struct {
+	Backend            string // db | file | s3
+	FileDir            string
+	S3Endpoint         string
+	S3Bucket           string
+	S3Region           string
+	S3AccessKey        string
+	S3UseSSL           bool
+	HasSecret          bool
+	DefaultMaxSessions int
+}
+
+func (s *Server) sessionsPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "세션 저장", "sessions")
+	settings, hasSecret, err := s.sessions.GetSettings(r.Context(), actorID(r))
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/")
+		return
+	}
+	pd.Data = sessionView{
+		Backend: string(settings.Backend), FileDir: settings.FileDir,
+		S3Endpoint: settings.S3Endpoint, S3Bucket: settings.S3Bucket, S3Region: settings.S3Region,
+		S3AccessKey: settings.S3AccessKey, S3UseSSL: settings.S3UseSSL, HasSecret: hasSecret,
+		DefaultMaxSessions: settings.DefaultMaxSessions,
+	}
+	s.render(w, "sessions", pd)
+}
+
+func (s *Server) sessionsUpdate(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	maxSessions, _ := strconv.Atoi(r.FormValue("default_max_sessions"))
+	err := s.sessions.UpdateSettings(r.Context(), domainproject.UpdateSettingsCommand{
+		ActorID: actorID(r),
+		Settings: domainproject.Settings{
+			Backend:            domainproject.Backend(r.FormValue("backend")),
+			FileDir:            r.FormValue("file_dir"),
+			S3Endpoint:         r.FormValue("s3_endpoint"),
+			S3Bucket:           r.FormValue("s3_bucket"),
+			S3Region:           r.FormValue("s3_region"),
+			S3AccessKey:        r.FormValue("s3_access_key"),
+			S3SecretKey:        r.FormValue("s3_secret_key"),
+			S3UseSSL:           r.FormValue("s3_use_ssl") == "on",
+			DefaultMaxSessions: maxSessions,
+		},
+	})
+	s.flashResult(w, err, "세션 저장 설정을 저장했습니다.")
+	s.redirect(w, r, basePath+"/sessions")
+}
+
+func (s *Server) sessionsTest(w http.ResponseWriter, r *http.Request) {
+	if err := s.sessions.TestConnection(r.Context(), actorID(r)); err != nil {
+		s.setFlashError(w, "연결 테스트 실패: "+err.Error())
+	} else {
+		s.setFlash(w, "연결 테스트에 성공했습니다.")
+	}
+	s.redirect(w, r, basePath+"/sessions")
+}
+
+func (s *Server) memberSetSessionLimit(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	maxSessions, _ := strconv.Atoi(r.FormValue("max_sessions"))
+	err := s.sessions.SetMemberLimit(r.Context(), actorID(r), r.PathValue("id"), maxSessions)
+	s.flashResult(w, err, "최대 세션 수를 변경했습니다.")
+	s.redirect(w, r, basePath+"/members")
 }
 
 // flashResult 는 use case 결과를 플래시 메시지로 변환한다.
@@ -388,6 +641,7 @@ func toMemberViews(ms []domainauth.Member) []memberView {
 		out = append(out, memberView{
 			ID: m.ID, Username: m.Username, Role: m.Role.Name, Level: int(m.Role.Level),
 			Active: m.Active, CreatedAt: m.CreatedAt.Format(time.RFC3339),
+			Email: m.Email, DisplayName: m.DisplayName, Organization: m.Organization,
 		})
 	}
 	return out

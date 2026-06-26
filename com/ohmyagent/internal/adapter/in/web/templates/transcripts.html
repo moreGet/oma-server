@@ -1,0 +1,90 @@
+{{define "content"}}
+{{if .CanManage}}
+<div class="card" style="max-width:44rem">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-clock-history me-1"></i> 대화 이력 저장 설정</div>
+  <div class="card-body">
+    <form method="post" action="/admin/transcripts">
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" name="enabled" id="tEnabled" {{if .Data.Enabled}}checked{{end}}>
+        <label class="form-check-label" for="tEnabled">대화 이력 저장 활성화</label>
+      </div>
+      <div class="mb-3">
+        <label class="form-label small text-secondary">저장 백엔드</label>
+        <select name="backend" id="tBackend" class="form-select">
+          <option value="db" {{if eq .Data.Backend "db"}}selected{{end}}>DB (gzip BLOB)</option>
+          <option value="file" {{if eq .Data.Backend "file"}}selected{{end}}>로컬 경로 (gzip 파일)</option>
+          <option value="s3" {{if eq .Data.Backend "s3"}}selected{{end}}>S3 호환 (minio-go)</option>
+        </select>
+      </div>
+      <div class="mb-3 backend-file">
+        <label class="form-label small text-secondary">저장 디렉터리</label>
+        <input type="text" name="file_dir" class="form-control" value="{{.Data.FileDir}}" placeholder="예: /var/lib/ohmyagent/transcripts">
+      </div>
+      <div class="backend-s3">
+        <div class="row g-2">
+          <div class="col-md-8">
+            <label class="form-label small text-secondary">endpoint</label>
+            <input type="text" name="s3_endpoint" class="form-control" value="{{.Data.S3Endpoint}}" placeholder="s3.amazonaws.com / minio:9000">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-secondary">region</label>
+            <input type="text" name="s3_region" class="form-control" value="{{.Data.S3Region}}" placeholder="us-east-1">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small text-secondary">bucket</label>
+            <input type="text" name="s3_bucket" class="form-control" value="{{.Data.S3Bucket}}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small text-secondary">access key</label>
+            <input type="text" name="s3_access_key" class="form-control" value="{{.Data.S3AccessKey}}" autocomplete="off">
+          </div>
+          <div class="col-md-8">
+            <label class="form-label small text-secondary">secret key {{if .Data.HasSecret}}<span class="text-success">(저장됨 — 변경 시에만 입력)</span>{{end}}</label>
+            <input type="password" name="s3_secret_key" class="form-control" autocomplete="off" placeholder="{{if .Data.HasSecret}}••••••••{{else}}secret key{{end}}">
+          </div>
+          <div class="col-md-4 d-flex align-items-end">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="s3_use_ssl" id="tSSL" {{if .Data.S3UseSSL}}checked{{end}}>
+              <label class="form-check-label" for="tSSL">SSL 사용</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <hr class="my-3">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label small text-secondary">보존 기간(일) <span class="text-secondary">— 0 = 무기한</span></label>
+          <input type="number" name="retention_days" min="0" class="form-control" value="{{.Data.RetentionDays}}">
+        </div>
+        <div class="col-md-6 d-flex align-items-end">
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" name="strip_attachments" id="tStrip" {{if .Data.StripAttachments}}checked{{end}}>
+            <label class="form-check-label" for="tStrip">에이전트 첨부 본문 제외(메타데이터만 보존)</label>
+          </div>
+        </div>
+      </div>
+      <div class="d-flex gap-2 mt-3">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 저장</button>
+        <button type="submit" formaction="/admin/transcripts/test" class="btn btn-outline-info"><i class="bi bi-plug"></i> 연결 테스트</button>
+      </div>
+    </form>
+    <p class="text-secondary small mt-3 mb-0"><i class="bi bi-shield-lock me-1"></i>S3 시크릿은 AES-GCM 암호화 저장(<code>APP_ENCRYPTION_SECRET</code> 필요). 본문은 gzip 압축. <b>연결 테스트는 저장된 설정 기준</b>이라 변경 후 먼저 저장하세요.</p>
+  </div>
+</div>
+<script>
+(function () {
+  var sel = document.getElementById('tBackend');
+  if (!sel) return;
+  function sync() {
+    var b = sel.value;
+    document.querySelectorAll('.backend-file').forEach(function (e) { e.style.display = (b === 'file') ? '' : 'none'; });
+    document.querySelectorAll('.backend-s3').forEach(function (e) { e.style.display = (b === 's3') ? '' : 'none'; });
+  }
+  sel.addEventListener('change', sync);
+  sync();
+})();
+</script>
+{{else}}
+<div class="alert alert-info">관리자만 접근할 수 있습니다.</div>
+{{end}}
+{{end}}

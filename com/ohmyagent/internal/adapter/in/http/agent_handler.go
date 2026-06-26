@@ -4,23 +4,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainagent "aiagent/com/ohmyagent/internal/domain/agent"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
+	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
 
 // AgentHandler 는 /api/v1/agent/chat (에이전트 루프 중계, SSE) 핸들러다.
 type AgentHandler struct {
-	svc domainagent.Service
+	svc        domainagent.Service
+	recorder   domaintranscript.Recorder // 대화 이력 비차단 기록(nil 허용)
+	stripAttch func() bool               // 이력 기록 시 첨부 본문 제거 여부(nil 허용)
+	quota      quotaChecker              // 토큰 쿼터 시행(nil 허용)
 }
 
 // NewAgentHandler 는 AgentHandler 를 생성한다.
-func NewAgentHandler(svc domainagent.Service) *AgentHandler {
-	return &AgentHandler{svc: svc}
+func NewAgentHandler(svc domainagent.Service, recorder domaintranscript.Recorder, stripAttachments func() bool, quota quotaChecker) *AgentHandler {
+	return &AgentHandler{svc: svc, recorder: recorder, stripAttch: stripAttachments, quota: quota}
 }
 
 // Chat 은 POST /api/v1/agent/chat 를 처리한다.
@@ -43,6 +50,13 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 	}
 	cmd := req.toCommand(claims.MemberID)
 
+	// 쿼터 사전 검사: 이번 달 한도 초과면 스트리밍 시작 전 429.
+	if h.quota != nil {
+		if err := h.quota.Check(r.Context(), claims.MemberID); err != nil {
+			return agentErrToHTTP(err)
+		}
+	}
+
 	rc := http.NewResponseController(w)
 	wroteHeader := false
 	ensureHeader := func() error {
@@ -62,9 +76,21 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 		return rc.Flush()
 	}
 
+	start := time.Now()
+	var respBuf strings.Builder
+	var stopReason string
+	var usage *domainagent.Usage
+
 	streamErr := h.svc.Stream(r.Context(), cmd, func(ev domainagent.Event) error {
 		if err := ensureHeader(); err != nil {
 			return err
+		}
+		switch ev.Kind {
+		case domainagent.EventContentDelta:
+			respBuf.WriteString(ev.Delta)
+		case domainagent.EventMessageStop:
+			stopReason = ev.StopReason
+			usage = ev.Usage
 		}
 		if err := writeAgentEvent(w, ev); err != nil {
 			return err
@@ -82,11 +108,70 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
+	// 정상 완료 시: 감사 이벤트 + 대화 이력 비동기 기록 + 쿼터 사용량 누적(usage 없으면 추정치).
+	response := respBuf.String()
+	h.recordAgent(claims.MemberID, req, response, stopReason, usage, start)
+	if h.quota != nil {
+		total := 0
+		if usage != nil {
+			total = usage.TotalTokens
+		}
+		h.quota.Add(r.Context(), claims.MemberID, quotaTokens(total, req.promptText()+response))
+	}
+
 	// 이벤트가 전혀 없던 경우에도 SSE 형태 유지(message_start 만이라도).
 	if !wroteHeader {
 		return ensureHeader()
 	}
 	return nil
+}
+
+// recordAgent 은 agent.request 감사 이벤트(메타데이터)를 남기고 대화 이력을 비동기 기록한다.
+func (h *AgentHandler) recordAgent(memberID string, req agentChatReq, response, stopReason string, usage *domainagent.Usage, start time.Time) {
+	var pt, ct, tt int
+	if usage != nil {
+		pt, ct, tt = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
+	}
+	slog.Info("agent request", "event", "agent.request",
+		"actor", memberID, "model", req.Model, "tools", len(req.Tools), "prompt_tokens", pt, "completion_tokens", ct,
+		"stop_reason", stopReason, "latency_ms", time.Since(start).Milliseconds())
+	if h.recorder == nil {
+		return
+	}
+	if h.stripAttch != nil && h.stripAttch() {
+		req = stripAttachmentData(req)
+	}
+	reqJSON, _ := json.Marshal(req)
+	h.recorder.Record(domaintranscript.Transcript{
+		MemberID:         memberID,
+		Source:           domaintranscript.SourceAgent,
+		Model:            req.Model,
+		Request:          reqJSON,
+		Response:         response,
+		PromptTokens:     pt,
+		CompletionTokens: ct,
+		TotalTokens:      tt,
+		FinishReason:     stopReason,
+	})
+}
+
+// stripAttachmentData 는 이력 저장용으로 첨부 본문(base64)을 제거한 사본을 만든다(메타데이터 보존).
+func stripAttachmentData(req agentChatReq) agentChatReq {
+	out := req
+	out.Messages = make([]agentMessageDTO, len(req.Messages))
+	for i, m := range req.Messages {
+		out.Messages[i] = m
+		if len(m.Attachments) == 0 {
+			continue
+		}
+		atts := make([]agentAttachmentDTO, len(m.Attachments))
+		for j, a := range m.Attachments {
+			a.DataBase64 = ""
+			atts[j] = a
+		}
+		out.Messages[i].Attachments = atts
+	}
+	return out
 }
 
 // writeAgentEvent 는 도메인 이벤트를 named SSE 이벤트로 기록한다.
@@ -169,6 +254,16 @@ type agentChatReq struct {
 	Stream      *bool             `json:"stream,omitempty"` // 수용하되 서버는 항상 SSE 스트리밍
 }
 
+// promptText 는 usage 추정용으로 메시지 본문을 이어붙인다(첨부 본문 제외).
+func (req agentChatReq) promptText() string {
+	var b strings.Builder
+	for _, m := range req.Messages {
+		b.WriteString(m.Content)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 func (req agentChatReq) toCommand(actorID string) domainagent.ChatCommand {
 	msgs := make([]domainagent.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -226,6 +321,8 @@ func agentErrToHTTP(err error) error {
 	switch {
 	case errors.As(err, &ve):
 		return ErrBadRequest(ve.Msg)
+	case errors.Is(err, domainquota.ErrExceeded):
+		return ErrTooManyRequests("token quota exceeded")
 	case errors.Is(err, domainllmprovider.ErrNoActiveProvider):
 		return ErrNotFound("no active llm provider")
 	case errors.Is(err, domainllmprovider.ErrChatUnsupported):

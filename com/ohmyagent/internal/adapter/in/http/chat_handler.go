@@ -1,26 +1,47 @@
 package httpin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainchat "aiagent/com/ohmyagent/internal/domain/chat"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
+	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
+
+// quotaChecker 는 토큰 쿼터 시행 인터페이스다(*quotaapp.Service 가 충족, nil 허용).
+type quotaChecker interface {
+	Check(ctx context.Context, memberID string) error
+	Add(ctx context.Context, memberID string, tokens int)
+}
+
+// quotaTokens 는 실측 total(>0)을 우선하고, usage 미제공(0) 시 prompt+response 텍스트로 추정한다.
+func quotaTokens(total int, text string) int {
+	if total > 0 {
+		return total
+	}
+	return domainquota.EstimateTokens(text)
+}
 
 // ChatHandler 는 /api/v1/chat 질의(클라이언트 → 활성 LLM → SSE 응답) 핸들러다.
 type ChatHandler struct {
-	svc domainchat.Service
+	svc      domainchat.Service
+	recorder domaintranscript.Recorder // 대화 이력 비차단 기록(nil 허용)
+	quota    quotaChecker              // 토큰 쿼터 시행(nil 허용)
 }
 
 // NewChatHandler 는 ChatHandler 를 생성한다.
-func NewChatHandler(svc domainchat.Service) *ChatHandler {
-	return &ChatHandler{svc: svc}
+func NewChatHandler(svc domainchat.Service, recorder domaintranscript.Recorder, quota quotaChecker) *ChatHandler {
+	return &ChatHandler{svc: svc, recorder: recorder, quota: quota}
 }
 
 // Stream 은 POST /api/v1/chat 를 처리한다.
@@ -41,6 +62,13 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		return ErrBadRequest("invalid request body")
 	}
 
+	// 쿼터 사전 검사: 이번 달 한도 초과면 스트리밍 시작 전 429.
+	if h.quota != nil {
+		if err := h.quota.Check(r.Context(), claims.MemberID); err != nil {
+			return chatErrToHTTP(err)
+		}
+	}
+
 	rc := http.NewResponseController(w)
 	wroteHeader := false
 	// ensureHeader 는 첫 조각 직전에 SSE 헤더+200 을 1회 기록한다(지연 기록).
@@ -59,9 +87,21 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		return rc.Flush()
 	}
 
+	start := time.Now()
+	var respBuf strings.Builder
+	var finishReason string
+	var usage *domainchat.Usage
+
 	streamErr := h.svc.Stream(r.Context(), req.toCommand(claims.MemberID), func(chunk domainchat.StreamChunk) error {
 		if err := ensureHeader(); err != nil {
 			return err
+		}
+		if chunk.Delta != "" {
+			respBuf.WriteString(chunk.Delta)
+		}
+		if chunk.Done {
+			finishReason = chunk.FinishReason
+			usage = chunk.Usage
 		}
 		if err := writeSSE(w, toChatChunkDTO(chunk)); err != nil {
 			return err
@@ -80,6 +120,17 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
+	// 정상 완료 시: 감사 이벤트 + 대화 이력 비동기 기록 + 쿼터 사용량 누적(usage 없으면 추정치).
+	response := respBuf.String()
+	h.recordChat(claims.MemberID, req, response, finishReason, usage, start)
+	if h.quota != nil {
+		total := 0
+		if usage != nil {
+			total = usage.TotalTokens
+		}
+		h.quota.Add(r.Context(), claims.MemberID, quotaTokens(total, req.promptText()+response))
+	}
+
 	// 조각이 하나도 없던 경우에도 SSE 응답 형태를 유지한다.
 	if !wroteHeader {
 		if err := ensureHeader(); err != nil {
@@ -89,6 +140,33 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		_ = rc.Flush()
 	}
 	return nil
+}
+
+// recordChat 은 chat.request 감사 이벤트(메타데이터, 본문 없음)를 남기고
+// 대화 이력(요청+응답)을 비동기 recorder 로 기록한다.
+func (h *ChatHandler) recordChat(memberID string, req chatReq, response, finishReason string, usage *domainchat.Usage, start time.Time) {
+	var pt, ct, tt int
+	if usage != nil {
+		pt, ct, tt = usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens
+	}
+	slog.Info("chat request", "event", "chat.request",
+		"actor", memberID, "model", req.Model, "prompt_tokens", pt, "completion_tokens", ct,
+		"finish_reason", finishReason, "latency_ms", time.Since(start).Milliseconds())
+	if h.recorder == nil {
+		return
+	}
+	reqJSON, _ := json.Marshal(req)
+	h.recorder.Record(domaintranscript.Transcript{
+		MemberID:         memberID,
+		Source:           domaintranscript.SourceChat,
+		Model:            req.Model,
+		Request:          reqJSON,
+		Response:         response,
+		PromptTokens:     pt,
+		CompletionTokens: ct,
+		TotalTokens:      tt,
+		FinishReason:     finishReason,
+	})
 }
 
 // writeSSE 는 payload 를 `data: {json}\n\n` 형식으로 기록한다.
@@ -115,6 +193,16 @@ type chatReq struct {
 	Model       string           `json:"model,omitempty"`
 	MaxTokens   int              `json:"max_tokens,omitempty"`
 	Temperature *float64         `json:"temperature,omitempty"`
+}
+
+// promptText 는 usage 추정용으로 메시지 본문을 이어붙인다.
+func (req chatReq) promptText() string {
+	var b strings.Builder
+	for _, m := range req.Messages {
+		b.WriteString(m.Content)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func (req chatReq) toCommand(actorID string) domainchat.ChatCommand {
@@ -163,6 +251,8 @@ func chatErrToHTTP(err error) error {
 	switch {
 	case errors.As(err, &ve):
 		return ErrBadRequest(ve.Msg)
+	case errors.Is(err, domainquota.ErrExceeded):
+		return ErrTooManyRequests("token quota exceeded")
 	case errors.Is(err, domainllmprovider.ErrNoActiveProvider):
 		return ErrNotFound("no active llm provider")
 	case errors.Is(err, domainllmprovider.ErrChatUnsupported):

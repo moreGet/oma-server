@@ -1,0 +1,161 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+)
+
+// 컴파일 타임 인터페이스 만족 검증.
+var _ domainquota.Repository = (*QuotaRepository)(nil)
+
+// QuotaRepository 는 토큰 사용량/한도를 영속화한다(domainquota.Repository 구현).
+// 사용량 누적은 driver 별 atomic upsert 로 다중 인스턴스 동시 갱신에도 정확하다.
+type QuotaRepository struct {
+	db     *sql.DB
+	driver string // mysql | sqlite (upsert SQL 분기)
+}
+
+// NewQuotaRepository 는 QuotaRepository 를 생성한다.
+func NewQuotaRepository(conn *sql.DB, driver string) *QuotaRepository {
+	return &QuotaRepository{db: conn, driver: driver}
+}
+
+// AddUsage 는 member/period 사용량을 원자적으로 += tokens 한다.
+func (r *QuotaRepository) AddUsage(ctx context.Context, memberID, period string, tokens int) error {
+	var q string
+	if r.driver == "mysql" {
+		q = "INSERT INTO token_usage (member_id, period, used_tokens) VALUES (?,?,?) " +
+			"ON DUPLICATE KEY UPDATE used_tokens = used_tokens + VALUES(used_tokens)"
+	} else { // sqlite
+		q = "INSERT INTO token_usage (member_id, period, used_tokens) VALUES (?,?,?) " +
+			"ON CONFLICT(member_id, period) DO UPDATE SET used_tokens = used_tokens + excluded.used_tokens"
+	}
+	if _, err := r.db.ExecContext(ctx, q, memberID, period, tokens); err != nil {
+		return fmt.Errorf("quota: add usage: %w", err)
+	}
+	return nil
+}
+
+// GetUsage 는 member/period 누적 사용량을 반환한다(없으면 0).
+func (r *QuotaRepository) GetUsage(ctx context.Context, memberID, period string) (int, error) {
+	var used int
+	err := r.db.QueryRowContext(ctx, "SELECT used_tokens FROM token_usage WHERE member_id=? AND period=?", memberID, period).Scan(&used)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("quota: get usage: %w", err)
+	}
+	return used, nil
+}
+
+// UsageByPeriod 는 해당 기간 전체 멤버 사용량 맵을 반환한다.
+func (r *QuotaRepository) UsageByPeriod(ctx context.Context, period string) (map[string]int, error) {
+	return r.scanMap(ctx, "SELECT member_id, used_tokens FROM token_usage WHERE period=?", period)
+}
+
+// ResetUsage 는 멤버의 모든 기간 사용량 행을 삭제한다(0으로 초기화).
+func (r *QuotaRepository) ResetUsage(ctx context.Context, memberID string) error {
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM token_usage WHERE member_id=?", memberID); err != nil {
+		return fmt.Errorf("quota: reset usage: %w", err)
+	}
+	return nil
+}
+
+// MemberLimits 는 멤버별 일/주/월 한도를 반환한다(없으면 0).
+func (r *QuotaRepository) MemberLimits(ctx context.Context, memberID string) (domainquota.Limits, error) {
+	var l domainquota.Limits
+	err := r.db.QueryRowContext(ctx, "SELECT daily_limit, weekly_limit, monthly_limit FROM member_token_limits WHERE member_id=?", memberID).Scan(&l.Daily, &l.Weekly, &l.Monthly)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domainquota.Limits{}, nil
+	}
+	if err != nil {
+		return domainquota.Limits{}, fmt.Errorf("quota: member limits: %w", err)
+	}
+	return l, nil
+}
+
+// SetMemberLimits 는 멤버별 한도를 upsert 한다(UPDATE→INSERT; 어드민 단발 호출이라 레이스 무관).
+func (r *QuotaRepository) SetMemberLimits(ctx context.Context, memberID string, l domainquota.Limits) error {
+	res, err := r.db.ExecContext(ctx, "UPDATE member_token_limits SET daily_limit=?, weekly_limit=?, monthly_limit=? WHERE member_id=?", l.Daily, l.Weekly, l.Monthly, memberID)
+	if err != nil {
+		return fmt.Errorf("quota: set member limits: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, "INSERT INTO member_token_limits (member_id, daily_limit, weekly_limit, monthly_limit) VALUES (?,?,?,?)", memberID, l.Daily, l.Weekly, l.Monthly); err != nil {
+		return fmt.Errorf("quota: insert member limits: %w", err)
+	}
+	return nil
+}
+
+// AllMemberLimits 는 하나라도 0 보다 큰 멤버별 한도 맵을 반환한다.
+func (r *QuotaRepository) AllMemberLimits(ctx context.Context) (map[string]domainquota.Limits, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits WHERE daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0")
+	if err != nil {
+		return nil, fmt.Errorf("quota: all member limits: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]domainquota.Limits)
+	for rows.Next() {
+		var id string
+		var l domainquota.Limits
+		if err := rows.Scan(&id, &l.Daily, &l.Weekly, &l.Monthly); err != nil {
+			return nil, fmt.Errorf("quota: scan member limits: %w", err)
+		}
+		out[id] = l
+	}
+	return out, rows.Err()
+}
+
+// DefaultLimits 는 전역 기본 한도를 반환한다.
+func (r *QuotaRepository) DefaultLimits(ctx context.Context) (domainquota.Limits, error) {
+	var l domainquota.Limits
+	err := r.db.QueryRowContext(ctx, "SELECT default_daily_limit, default_weekly_limit, default_monthly_limit FROM quota_config WHERE id=1").Scan(&l.Daily, &l.Weekly, &l.Monthly)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domainquota.Limits{}, nil
+	}
+	if err != nil {
+		return domainquota.Limits{}, fmt.Errorf("quota: default limits: %w", err)
+	}
+	return l, nil
+}
+
+// SetDefaultLimits 는 전역 기본 한도를 upsert 한다.
+func (r *QuotaRepository) SetDefaultLimits(ctx context.Context, l domainquota.Limits) error {
+	res, err := r.db.ExecContext(ctx, "UPDATE quota_config SET default_daily_limit=?, default_weekly_limit=?, default_monthly_limit=? WHERE id=1", l.Daily, l.Weekly, l.Monthly)
+	if err != nil {
+		return fmt.Errorf("quota: set defaults: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, "INSERT INTO quota_config (id, default_daily_limit, default_weekly_limit, default_monthly_limit) VALUES (1,?,?,?)", l.Daily, l.Weekly, l.Monthly); err != nil {
+		return fmt.Errorf("quota: insert defaults: %w", err)
+	}
+	return nil
+}
+
+// scanMap 은 (member_id, int) 2컬럼 결과를 맵으로 스캔한다.
+func (r *QuotaRepository) scanMap(ctx context.Context, query string, args ...any) (map[string]int, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("quota: query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]int)
+	for rows.Next() {
+		var id string
+		var v int
+		if err := rows.Scan(&id, &v); err != nil {
+			return nil, fmt.Errorf("quota: scan: %w", err)
+		}
+		out[id] = v
+	}
+	return out, rows.Err()
+}

@@ -19,6 +19,7 @@ const (
 	CodeNotFound         = "NOT_FOUND"
 	CodeMethodNotAllowed = "METHOD_NOT_ALLOWED"
 	CodeConflict         = "CONFLICT"
+	CodeTooManyRequests  = "TOO_MANY_REQUESTS"
 	CodeBadGateway       = "BAD_GATEWAY"
 	CodeInternal         = "INTERNAL_ERROR"
 )
@@ -124,6 +125,8 @@ func (e *AppError) HTTPStatus() int {
 		return http.StatusMethodNotAllowed
 	case CodeConflict:
 		return http.StatusConflict
+	case CodeTooManyRequests:
+		return http.StatusTooManyRequests
 	case CodeBadGateway:
 		return http.StatusBadGateway
 	default:
@@ -138,7 +141,10 @@ func ErrUnauthorized(msg string) *AppError { return &AppError{Code: CodeUnauthor
 func ErrForbidden(msg string) *AppError    { return &AppError{Code: CodeForbidden, Message: msg} }
 func ErrNotFound(msg string) *AppError     { return &AppError{Code: CodeNotFound, Message: msg} }
 func ErrConflict(msg string) *AppError     { return &AppError{Code: CodeConflict, Message: msg} }
-func ErrBadGateway(msg string) *AppError   { return &AppError{Code: CodeBadGateway, Message: msg} }
+func ErrTooManyRequests(msg string) *AppError {
+	return &AppError{Code: CodeTooManyRequests, Message: msg}
+}
+func ErrBadGateway(msg string) *AppError { return &AppError{Code: CodeBadGateway, Message: msg} }
 
 // toAppError 는 임의 에러를 AppError 로 변환한다. AppError 가 아니면 500 으로 폴백한다.
 func toAppError(err error) *AppError {
