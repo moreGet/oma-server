@@ -83,12 +83,20 @@
     .donuts-lg .donut-c .du { font-size:.6rem; color:var(--bs-secondary-color); margin-top:.05rem; }
 
     /* ── 모달 탭(슬림 관리 UI) ── */
-    .modal-tabs { gap:.3rem; }
-    .modal-tabs .nav-link { padding:.34rem .5rem; font-size:.82rem; font-weight:600;
-      color:var(--bs-secondary-color); border-radius:.55rem; }
-    .modal-tabs .nav-link:hover { background:var(--bs-tertiary-bg); color:var(--bs-body-color); }
-    .modal-tabs .nav-link.active { background:#6366f1; color:#fff; }
-    .modal-tabs .nav-link.danger.active { background:#ef4444; }
+    /* 탭바: 세그먼트 컨트롤(배경 박스)로 묶어 상단 정보와 분리 */
+    .modal-tabs { gap:.25rem; background:var(--bs-tertiary-bg); padding:.3rem;
+      border-radius:.7rem; border:1px solid var(--bs-border-color); }
+    .modal-tabs .nav-link { padding:.38rem .5rem; font-size:.82rem; font-weight:600;
+      color:var(--bs-secondary-color); border-radius:.5rem; }
+    .modal-tabs .nav-link:hover { background:rgba(148,163,184,.12); color:var(--bs-body-color); }
+    .modal-tabs .nav-link.active { background:#6366f1; color:#fff; box-shadow:0 3px 10px rgba(99,102,241,.35); }
+    .modal-tabs .nav-link.danger.active { background:#ef4444; box-shadow:0 3px 10px rgba(239,68,68,.35); }
+    /* 탭 콘텐츠: 경계선 있는 패널로 감싸 탭바·하단 컨텐츠 구분 */
+    .tab-panel { border:1px solid var(--bs-border-color); border-radius:.7rem;
+      padding:1.1rem; margin-top:.85rem; background:rgba(148,163,184,.04); }
+    .member-modal .modal-header { border-bottom:1px solid var(--bs-border-color);
+      background:rgba(148,163,184,.05); }
+    .member-modal .modal-title { font-size:1.05rem; }
     .sect-label { font-size:.7rem; text-transform:uppercase; letter-spacing:.07em;
       color:#5b6473; font-weight:700; }
 

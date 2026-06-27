@@ -5,7 +5,7 @@
     <div class="card h-100"><div class="card-body d-flex align-items-center gap-3">
       <span class="stat-ic"><i class="bi bi-people"></i></span>
       <div><div class="text-secondary small fw-semibold">전체 멤버</div>
-        <div class="fs-3 fw-bold">{{.Data.MemberTotal}}</div></div>
+        <div class="fs-3 fw-bold">{{comma .Data.MemberTotal}}</div></div>
     </div></div>
   </div>
   {{range .Data.ByRole}}
@@ -13,7 +13,7 @@
     <div class="card h-100"><div class="card-body d-flex align-items-center gap-3">
       <span class="stat-ic"><i class="bi bi-tag"></i></span>
       <div><div class="text-secondary small fw-semibold">{{.Name}}</div>
-        <div class="fs-3 fw-bold">{{.Count}}</div></div>
+        <div class="fs-3 fw-bold">{{comma .Count}}</div></div>
     </div></div>
   </div>
   {{end}}
@@ -22,7 +22,7 @@
     <div class="card h-100"><div class="card-body d-flex align-items-center gap-3">
       <span class="stat-ic"><i class="bi bi-hdd-stack"></i></span>
       <div><div class="text-secondary small fw-semibold">등록 Provider</div>
-        <div class="fs-3 fw-bold">{{.Data.ProviderTotal}}</div></div>
+        <div class="fs-3 fw-bold">{{comma .Data.ProviderTotal}}</div></div>
     </div></div>
   </div>
   <div class="col-12 col-sm-6 col-xl-3">

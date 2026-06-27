@@ -9,6 +9,8 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
@@ -85,12 +87,46 @@ func NewServer(auth domainauth.Service, providers domainllmprovider.Service, tra
 	}
 }
 
-// parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다.
+// templateFuncs 는 어드민 템플릿 공용 함수다.
+//   - comma: 정수를 천 단위 구분 기호로 포맷(예: 1234567 → "1,234,567"). 표시 전용(입력 필드 값엔 미사용).
+var templateFuncs = template.FuncMap{"comma": commaInt}
+
+// commaInt 는 정수에 천 단위 콤마를 넣어 문자열로 반환한다.
+func commaInt(n int) string {
+	neg := n < 0
+	s := strconv.Itoa(n)
+	if neg {
+		s = s[1:] // 부호 분리
+	}
+	if len(s) <= 3 {
+		if neg {
+			return "-" + s
+		}
+		return s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre > 0 {
+		b.WriteString(s[:pre])
+	}
+	for i := pre; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	if neg {
+		return "-" + b.String()
+	}
+	return b.String()
+}
+
+// parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다(공용 함수 주입).
 func parsePages() map[string]*template.Template {
 	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
-		out[n] = template.Must(template.ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
+		out[n] = template.Must(template.New("layout.html").Funcs(templateFuncs).ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
 	}
 	return out
 }

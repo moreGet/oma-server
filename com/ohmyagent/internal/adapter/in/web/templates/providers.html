@@ -2,7 +2,7 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h5 class="mb-0">LLM Provider</h5>
-    <small class="text-secondary">총 {{len .Data.Providers}}개</small>
+    <small class="text-secondary">총 {{comma (len .Data.Providers)}}개</small>
   </div>
   {{if .CanManage}}
   <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createProviderModal">

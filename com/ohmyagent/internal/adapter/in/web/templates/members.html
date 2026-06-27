@@ -2,7 +2,7 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h5 class="mb-0">멤버 목록</h5>
-    <small class="text-secondary">총 {{len .Data.Members}}명</small>
+    <small class="text-secondary">총 {{comma (len .Data.Members)}}명</small>
   </div>
   {{if .CanManageMembers}}
   <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createMemberModal">
@@ -64,8 +64,8 @@
 {{range $m := .Data.Members}}
 <div class="modal fade" id="member-{{$m.ID}}" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header border-0 pb-2">
+    <div class="modal-content member-modal">
+      <div class="modal-header pb-3">
         <div class="d-flex align-items-center gap-2">
           <span class="avatar" style="width:40px;height:40px;font-size:1rem"><i class="bi bi-person-fill"></i></span>
           <div class="lh-1">
@@ -77,9 +77,9 @@
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
       </div>
-      <div class="modal-body pt-1">
+      <div class="modal-body pt-3">
         {{/* 슬림 탭 */}}
-        <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
+        <ul class="nav nav-pills nav-fill modal-tabs" role="tablist">
           <li class="nav-item" role="presentation">
             <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-sum-{{$m.ID}}" type="button" role="tab">요약</button>
           </li>
@@ -99,7 +99,7 @@
           {{end}}
         </ul>
 
-        <div class="tab-content">
+        <div class="tab-content tab-panel">
           {{/* 1. 프로필 요약 — 도넛(일/주/월) + 읽기전용 정보 */}}
           <div class="tab-pane fade show active" id="tk-sum-{{$m.ID}}" role="tabpanel">
             <div class="donuts donuts-lg justify-content-center my-2">
@@ -155,21 +155,21 @@
             <form method="post" action="/admin/members/{{$m.ID}}/token-limit" class="vstack gap-3">
               <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값 · 슬라이더 또는 직접 입력)</span></span>
               <div>
-                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 {{$m.DailyUsed}}</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 {{comma $m.DailyUsed}}</span></div>
                 <div class="d-flex align-items-center gap-2">
                   <input type="range" min="0" max="1000000" step="1000" value="{{$m.DailyLimit}}" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="일 토큰 한도 슬라이더">
                   <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="{{$m.DailyLimit}}" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <div>
-                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 {{$m.WeeklyUsed}}</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 {{comma $m.WeeklyUsed}}</span></div>
                 <div class="d-flex align-items-center gap-2">
                   <input type="range" min="0" max="1000000" step="1000" value="{{$m.WeeklyLimit}}" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="주 토큰 한도 슬라이더">
                   <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="{{$m.WeeklyLimit}}" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <div>
-                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 {{$m.MonthlyUsed}}</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 {{comma $m.MonthlyUsed}}</span></div>
                 <div class="d-flex align-items-center gap-2">
                   <input type="range" min="0" max="1000000" step="1000" value="{{$m.MonthlyLimit}}" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="월 토큰 한도 슬라이더">
                   <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="{{$m.MonthlyLimit}}" oninput="this.previousElementSibling.value=this.value">
@@ -261,7 +261,7 @@
 
 {{/* ── 토큰 사용 도넛(memberQuotaView): 일/주/월 각각 1개, 가운데 라벨+퍼센트 ── */}}
 {{define "donut"}}
-<div class="donut{{if .Unlimited}} unl{{end}}" title="{{.Label}} · 사용 {{.Used}}{{if not .Unlimited}} / 한도 {{.Limit}}{{end}}">
+<div class="donut{{if .Unlimited}} unl{{end}}" title="{{.Label}} · 사용 {{comma .Used}}{{if not .Unlimited}} / 한도 {{comma .Limit}}{{end}}">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     {{if not .Unlimited}}<circle class="d-fill{{if ge .PctUsed 90}} danger{{else if ge .PctUsed 70}} warn{{end}}" cx="18" cy="18" r="15.9155" stroke-dasharray="{{.PctUsed}} 100"></circle>{{end}}
@@ -269,7 +269,7 @@
   <div class="donut-c">
     <span class="dl">{{.Label}}</span>
     {{if .Unlimited}}<span class="dv unl">∞</span><span class="du">무제한</span>
-    {{else}}<span class="dv">{{.PctUsed}}%</span><span class="du">{{.Used}}/{{.Limit}}</span>{{end}}
+    {{else}}<span class="dv">{{.PctUsed}}%</span><span class="du">{{comma .Used}}/{{comma .Limit}}</span>{{end}}
   </div>
 </div>
 {{end}}

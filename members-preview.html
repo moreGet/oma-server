@@ -83,12 +83,20 @@
     .donuts-lg .donut-c .du { font-size:.6rem; color:var(--bs-secondary-color); margin-top:.05rem; }
 
      
-    .modal-tabs { gap:.3rem; }
-    .modal-tabs .nav-link { padding:.34rem .5rem; font-size:.82rem; font-weight:600;
-      color:var(--bs-secondary-color); border-radius:.55rem; }
-    .modal-tabs .nav-link:hover { background:var(--bs-tertiary-bg); color:var(--bs-body-color); }
-    .modal-tabs .nav-link.active { background:#6366f1; color:#fff; }
-    .modal-tabs .nav-link.danger.active { background:#ef4444; }
+     
+    .modal-tabs { gap:.25rem; background:var(--bs-tertiary-bg); padding:.3rem;
+      border-radius:.7rem; border:1px solid var(--bs-border-color); }
+    .modal-tabs .nav-link { padding:.38rem .5rem; font-size:.82rem; font-weight:600;
+      color:var(--bs-secondary-color); border-radius:.5rem; }
+    .modal-tabs .nav-link:hover { background:rgba(148,163,184,.12); color:var(--bs-body-color); }
+    .modal-tabs .nav-link.active { background:#6366f1; color:#fff; box-shadow:0 3px 10px rgba(99,102,241,.35); }
+    .modal-tabs .nav-link.danger.active { background:#ef4444; box-shadow:0 3px 10px rgba(239,68,68,.35); }
+     
+    .tab-panel { border:1px solid var(--bs-border-color); border-radius:.7rem;
+      padding:1.1rem; margin-top:.85rem; background:rgba(148,163,184,.04); }
+    .member-modal .modal-header { border-bottom:1px solid var(--bs-border-color);
+      background:rgba(148,163,184,.05); }
+    .member-modal .modal-title { font-size:1.05rem; }
     .sect-label { font-size:.7rem; text-transform:uppercase; letter-spacing:.07em;
       color:#5b6473; font-weight:700; }
 
@@ -183,29 +191,29 @@
           <td>
             <div class="donuts donuts-sm">
               
-<div class="donut" title="일 · 사용 12500 / 한도 50000">
+<div class="donut" title="일 · 사용 12,500 / 한도 50,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="25 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">일</span>
-    <span class="dv">25%</span><span class="du">12500/50000</span>
+    <span class="dv">25%</span><span class="du">12,500/50,000</span>
   </div>
 </div>
 
-<div class="donut" title="주 · 사용 192000 / 한도 200000">
+<div class="donut" title="주 · 사용 192,000 / 한도 200,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill danger" cx="18" cy="18" r="15.9155" stroke-dasharray="96 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">주</span>
-    <span class="dv">96%</span><span class="du">192000/200000</span>
+    <span class="dv">96%</span><span class="du">192,000/200,000</span>
   </div>
 </div>
 
-<div class="donut unl" title="월 · 사용 840000">
+<div class="donut unl" title="월 · 사용 840,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     
@@ -219,7 +227,7 @@
 
             </div>
           </td>
-          <td><small class="text-secondary">2026-06-20</small></td>
+          <td><small class="text-secondary">2026-06-20 14:32:07</small></td>
           
           <td class="text-end">
             <button class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#member-m1">
@@ -238,42 +246,42 @@
           <td>
             <div class="donuts donuts-sm">
               
-<div class="donut" title="일 · 사용 740 / 한도 1000">
+<div class="donut" title="일 · 사용 740 / 한도 1,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill warn" cx="18" cy="18" r="15.9155" stroke-dasharray="74 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">일</span>
-    <span class="dv">74%</span><span class="du">740/1000</span>
+    <span class="dv">74%</span><span class="du">740/1,000</span>
   </div>
 </div>
 
-<div class="donut" title="주 · 사용 1200 / 한도 5000">
+<div class="donut" title="주 · 사용 1,200 / 한도 5,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="24 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">주</span>
-    <span class="dv">24%</span><span class="du">1200/5000</span>
+    <span class="dv">24%</span><span class="du">1,200/5,000</span>
   </div>
 </div>
 
-<div class="donut" title="월 · 사용 30 / 한도 20000">
+<div class="donut" title="월 · 사용 30 / 한도 20,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="1 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">월</span>
-    <span class="dv">1%</span><span class="du">30/20000</span>
+    <span class="dv">1%</span><span class="du">30/20,000</span>
   </div>
 </div>
 
             </div>
           </td>
-          <td><small class="text-secondary">2026-06-22</small></td>
+          <td><small class="text-secondary">2026-06-22 09:05:41</small></td>
           
           <td class="text-end">
             <button class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#member-m2">
@@ -294,8 +302,8 @@
 
 <div class="modal fade" id="member-m1" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header border-0 pb-2">
+    <div class="modal-content member-modal">
+      <div class="modal-header pb-3">
         <div class="d-flex align-items-center gap-2">
           <span class="avatar" style="width:40px;height:40px;font-size:1rem"><i class="bi bi-person-fill"></i></span>
           <div class="lh-1">
@@ -307,9 +315,9 @@
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
       </div>
-      <div class="modal-body pt-1">
+      <div class="modal-body pt-3">
         
-        <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
+        <ul class="nav nav-pills nav-fill modal-tabs" role="tablist">
           <li class="nav-item" role="presentation">
             <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-sum-m1" type="button" role="tab">요약</button>
           </li>
@@ -329,34 +337,34 @@
           
         </ul>
 
-        <div class="tab-content">
+        <div class="tab-content tab-panel">
           
           <div class="tab-pane fade show active" id="tk-sum-m1" role="tabpanel">
             <div class="donuts donuts-lg justify-content-center my-2">
               
-<div class="donut" title="일 · 사용 12500 / 한도 50000">
+<div class="donut" title="일 · 사용 12,500 / 한도 50,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="25 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">일</span>
-    <span class="dv">25%</span><span class="du">12500/50000</span>
+    <span class="dv">25%</span><span class="du">12,500/50,000</span>
   </div>
 </div>
 
-<div class="donut" title="주 · 사용 192000 / 한도 200000">
+<div class="donut" title="주 · 사용 192,000 / 한도 200,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill danger" cx="18" cy="18" r="15.9155" stroke-dasharray="96 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">주</span>
-    <span class="dv">96%</span><span class="du">192000/200000</span>
+    <span class="dv">96%</span><span class="du">192,000/200,000</span>
   </div>
 </div>
 
-<div class="donut unl" title="월 · 사용 840000">
+<div class="donut unl" title="월 · 사용 840,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     
@@ -373,7 +381,7 @@
               <dt class="col-4 text-secondary fw-normal">표시명</dt><dd class="col-8 mb-0">앨리스</dd>
               <dt class="col-4 text-secondary fw-normal">소속</dt><dd class="col-8 mb-0">플랫폼팀</dd>
               <dt class="col-4 text-secondary fw-normal">이메일</dt><dd class="col-8 mb-0">alice@corp.io</dd>
-              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">2026-06-20</dd>
+              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">2026-06-20 14:32:07</dd>
             </dl>
           </div>
 
@@ -419,21 +427,21 @@
             <form method="post" action="/admin/members/m1/token-limit" class="vstack gap-3">
               <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값 · 슬라이더 또는 직접 입력)</span></span>
               <div>
-                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 12500</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 12,500</span></div>
                 <div class="d-flex align-items-center gap-2">
                   <input type="range" min="0" max="1000000" step="1000" value="50000" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="일 토큰 한도 슬라이더">
                   <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="50000" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <div>
-                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 192000</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 192,000</span></div>
                 <div class="d-flex align-items-center gap-2">
                   <input type="range" min="0" max="1000000" step="1000" value="200000" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="주 토큰 한도 슬라이더">
                   <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="200000" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <div>
-                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 840000</span></div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 840,000</span></div>
                 <div class="d-flex align-items-center gap-2">
                   <input type="range" min="0" max="1000000" step="1000" value="0" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="월 토큰 한도 슬라이더">
                   <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="0" oninput="this.previousElementSibling.value=this.value">
@@ -483,8 +491,8 @@
 
 <div class="modal fade" id="member-m2" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header border-0 pb-2">
+    <div class="modal-content member-modal">
+      <div class="modal-header pb-3">
         <div class="d-flex align-items-center gap-2">
           <span class="avatar" style="width:40px;height:40px;font-size:1rem"><i class="bi bi-person-fill"></i></span>
           <div class="lh-1">
@@ -495,9 +503,9 @@
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
       </div>
-      <div class="modal-body pt-1">
+      <div class="modal-body pt-3">
         
-        <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
+        <ul class="nav nav-pills nav-fill modal-tabs" role="tablist">
           <li class="nav-item" role="presentation">
             <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-sum-m2" type="button" role="tab">요약</button>
           </li>
@@ -517,41 +525,41 @@
           
         </ul>
 
-        <div class="tab-content">
+        <div class="tab-content tab-panel">
           
           <div class="tab-pane fade show active" id="tk-sum-m2" role="tabpanel">
             <div class="donuts donuts-lg justify-content-center my-2">
               
-<div class="donut" title="일 · 사용 740 / 한도 1000">
+<div class="donut" title="일 · 사용 740 / 한도 1,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill warn" cx="18" cy="18" r="15.9155" stroke-dasharray="74 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">일</span>
-    <span class="dv">74%</span><span class="du">740/1000</span>
+    <span class="dv">74%</span><span class="du">740/1,000</span>
   </div>
 </div>
 
-<div class="donut" title="주 · 사용 1200 / 한도 5000">
+<div class="donut" title="주 · 사용 1,200 / 한도 5,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="24 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">주</span>
-    <span class="dv">24%</span><span class="du">1200/5000</span>
+    <span class="dv">24%</span><span class="du">1,200/5,000</span>
   </div>
 </div>
 
-<div class="donut" title="월 · 사용 30 / 한도 20000">
+<div class="donut" title="월 · 사용 30 / 한도 20,000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="1 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">월</span>
-    <span class="dv">1%</span><span class="du">30/20000</span>
+    <span class="dv">1%</span><span class="du">30/20,000</span>
   </div>
 </div>
 
@@ -560,7 +568,7 @@
               <dt class="col-4 text-secondary fw-normal">표시명</dt><dd class="col-8 mb-0"><span class="text-secondary">—</span></dd>
               <dt class="col-4 text-secondary fw-normal">소속</dt><dd class="col-8 mb-0"><span class="text-secondary">—</span></dd>
               <dt class="col-4 text-secondary fw-normal">이메일</dt><dd class="col-8 mb-0"><span class="text-secondary">—</span></dd>
-              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">2026-06-22</dd>
+              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">2026-06-22 09:05:41</dd>
             </dl>
           </div>
 

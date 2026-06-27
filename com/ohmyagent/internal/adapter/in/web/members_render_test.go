@@ -53,9 +53,23 @@ func TestRenderMembersPage(t *testing.T) {
 		`type="range"`,                   // 토큰 한도 슬라이더
 		`name="daily_limit"`,             // 슬라이더와 짝지은 수치 입력
 		`form="prof-m1"`,                 // 하단 분리된 프로필 저장 버튼
+		`사용 4,800`,                       // 천 단위 콤마(주 사용량)
+		`tab-content tab-panel`,          // 탭 콘텐츠 경계 패널
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("렌더 결과에 %q 누락", want)
+		}
+	}
+}
+
+func TestCommaInt(t *testing.T) {
+	cases := map[int]string{
+		0: "0", 7: "7", 999: "999", 1000: "1,000", 12500: "12,500",
+		1000000: "1,000,000", 1234567: "1,234,567", -1500: "-1,500",
+	}
+	for in, want := range cases {
+		if got := commaInt(in); got != want {
+			t.Errorf("commaInt(%d) = %q, want %q", in, got, want)
 		}
 	}
 }
