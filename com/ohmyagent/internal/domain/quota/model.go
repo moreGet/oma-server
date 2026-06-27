@@ -9,8 +9,59 @@ import (
 	"time"
 )
 
-// ErrExceeded 는 토큰 한도 초과를 나타낸다. → 429
+// ErrExceeded 는 토큰 한도 초과 센티넬이다. → 429. 상세는 *ExceededError 참고.
 var ErrExceeded = errors.New("token quota exceeded")
+
+// ExceededError 는 어느 윈도우가 한도를 초과했는지와 사용량·리셋 시각을 담는다.
+// errors.Is(err, ErrExceeded) 로 매칭되며, Error() 가 클라 표시용 상세 메시지를 만든다.
+type ExceededError struct {
+	Window   Window
+	Used     int
+	Limit    int
+	Period   string
+	ResetUTC time.Time
+}
+
+func (e *ExceededError) Error() string {
+	return fmt.Sprintf("%s token quota exceeded: used %d of %d (period %s, resets %s)",
+		e.Window.Label(), e.Used, e.Limit, e.Period, e.ResetUTC.UTC().Format(time.RFC3339))
+}
+
+// Is 는 ExceededError 가 ErrExceeded 센티넬에 매칭되게 한다(errors.Is 호환).
+func (e *ExceededError) Is(target error) bool { return target == ErrExceeded }
+
+// Label 은 윈도우의 사람이 읽는 라벨이다.
+func (w Window) Label() string {
+	switch w {
+	case Daily:
+		return "daily"
+	case Weekly:
+		return "weekly"
+	default:
+		return "monthly"
+	}
+}
+
+// ResetAfter 는 해당 윈도우가 0으로 리셋되는 다음 경계 시각(UTC)을 반환한다.
+//
+//	Daily   → 다음 UTC 자정
+//	Weekly  → 다음 월요일 00:00 UTC(ISO 주 시작)
+//	Monthly → 다음 달 1일 00:00 UTC
+func ResetAfter(w Window, t time.Time) time.Time {
+	day := t.UTC().Truncate(24 * time.Hour) // 오늘 00:00 UTC
+	switch w {
+	case Daily:
+		return day.AddDate(0, 0, 1)
+	case Weekly:
+		offset := (8 - int(day.Weekday())) % 7 // 다음 월요일까지 일수(오늘이 월요일이면 7)
+		if offset == 0 {
+			offset = 7
+		}
+		return day.AddDate(0, 0, offset)
+	default: // Monthly
+		return time.Date(t.UTC().Year(), t.UTC().Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	}
+}
 
 // Window 는 한도 적용 기간 단위다.
 type Window string

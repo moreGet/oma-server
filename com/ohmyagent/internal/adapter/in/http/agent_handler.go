@@ -318,9 +318,12 @@ type agentStopDTO struct {
 // agentErrToHTTP 는 agent/llmprovider 도메인 에러를 AppError 로 매핑한다.
 func agentErrToHTTP(err error) error {
 	var ve *domainagent.ErrValidation
+	var qe *domainquota.ExceededError
 	switch {
 	case errors.As(err, &ve):
 		return ErrBadRequest(ve.Msg)
+	case errors.As(err, &qe):
+		return ErrTooManyRequests(qe.Error()) // 윈도우·used/limit·리셋 시각 포함
 	case errors.Is(err, domainquota.ErrExceeded):
 		return ErrTooManyRequests("token quota exceeded")
 	case errors.Is(err, domainllmprovider.ErrNoActiveProvider):

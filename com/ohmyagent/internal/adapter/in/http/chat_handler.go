@@ -248,9 +248,12 @@ func toChatChunkDTO(c domainchat.StreamChunk) chatChunkDTO {
 // chatErrToHTTP 는 chat/llmprovider 도메인 에러를 AppError 로 매핑한다.
 func chatErrToHTTP(err error) error {
 	var ve *domainchat.ErrValidation
+	var qe *domainquota.ExceededError
 	switch {
 	case errors.As(err, &ve):
 		return ErrBadRequest(ve.Msg)
+	case errors.As(err, &qe):
+		return ErrTooManyRequests(qe.Error()) // 윈도우·used/limit·리셋 시각 포함
 	case errors.Is(err, domainquota.ErrExceeded):
 		return ErrTooManyRequests("token quota exceeded")
 	case errors.Is(err, domainllmprovider.ErrNoActiveProvider):

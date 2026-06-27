@@ -7,6 +7,57 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 - **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**): `{ "error": { "code": "bad_request", "message": "..." } }`
   소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
 
+---
+
+## 에러 코드 (전수)
+
+같은 HTTP 상태라도 envelope 종류에 따라 코드 표기가 다르다(평면=대문자, 중첩=소문자). **HTTP 상태로 분기**하는 것을 권장한다.
+
+| HTTP | 평면 code | 중첩 code | 의미 | 대표 발생 상황 |
+|---|---|---|---|---|
+| **400** | `BAD_REQUEST` | `bad_request` | 잘못된 요청 | JSON 파싱 실패, 필수 필드 누락, 형식 오류(`messages` 빈 배열, `api_key_env` 형식 위반, 첨부 MIME 불허/>10MiB, `client_id`/`title` 누락 등) |
+| **401** | `UNAUTHORIZED` | `unauthorized` | 인증 실패 | Authorization 헤더 없음 / Bearer 토큰 만료·서명불일치·형식오류 |
+| **403** | `FORBIDDEN` | `forbidden` | 인가 실패 | 역할 부족(`MinRole` 미달), 타인 소유 리소스 접근(세션/멤버 `CanControl` 위반) |
+| **404** | `NOT_FOUND` | `not_found` | 리소스 없음 | 멤버/Provider/프로젝트/대화 없음, **활성 LLM Provider 없음**(`no active llm provider`), 미구현 선택 엔드포인트 |
+| **405** | `METHOD_NOT_ALLOWED` | `backend_error` | 미허용 메서드 | 라우터에 없는 메서드 |
+| **409** | `CONFLICT` | `backend_error` | 충돌 | 중복(예: username 중복 생성) |
+| **429** | `TOO_MANY_REQUESTS` | `rate_limited` | 한도 초과 | **토큰 쿼터(일/주/월) 초과** 또는 **세션 저장 캡 초과**. 인증과 무관 |
+| **500** | `INTERNAL_ERROR` | `backend_error` | 서버 오류 | 미처리 예외/패닉(복구되어 500 반환) |
+| **502** | `BAD_GATEWAY` | `backend_error` | 업스트림 오류 | LLM 호출 실패, 어댑터가 채팅 미지원(예: 잘못된 설정) |
+
+> 중첩 envelope 매핑은 **HTTP 상태 기준**이다: 400→`bad_request`, 401→`unauthorized`, 403→`forbidden`, 404→`not_found`, 429→`rate_limited`, **그 외(405/409/500/502)→`backend_error`**.
+
+### 429 토큰 쿼터 메시지 (상세)
+쿼터 초과 시 `message` 에 **어느 윈도우·사용량·리셋 시각**이 포함된다(클라가 그대로 표시 가능):
+```json
+{ "error": { "code": "rate_limited",
+  "message": "daily token quota exceeded: used 1115 of 5 (period 2026-06-27, resets 2026-06-28T00:00:00Z)" } }
+```
+- `daily | weekly | monthly` 중 어떤 한도에 걸렸는지 명시. `resets` 는 ISO-8601 UTC(다음 경계: 일=자정 / 주=다음 월요일 00:00 / 월=다음 달 1일).
+- 세션 저장 캡 초과는 `message: "session storage limit exceeded"`(429).
+- 잔여량은 `GET /api/v1/me/quota` 로 사전 확인 가능.
+
+### 클라이언트 처리 가이드 (중요)
+**상태별로 동작을 구분**한다. 특히 **401에서만 재로그인**하고, 그 외는 메시지를 띄울 뿐 세션을 비우지 않는다.
+
+| 상태 | 권장 클라 동작 |
+|---|---|
+| **401** | 토큰 무효/만료 → **재로그인 유도**(여기서만 세션 폐기) |
+| **403** | 권한 부족 → "권한이 없습니다" 안내. **로그아웃 금지** |
+| **429** | 쿼터/캡 초과 → **오류 메시지 표시**(message 그대로) + 재시도/대기. **로그아웃 금지** |
+| **404** | 리소스 없음/미구현 선택 기능 → graceful(해당 기능만 비활성). **로그아웃 금지** |
+| **400** | 입력 오류 → 사용자에게 수정 안내 |
+| **500 / 502** | 서버/업스트림 오류 → "잠시 후 다시 시도" + 재시도(backoff) |
+
+> ⚠️ **429/404/403/5xx 를 인증 실패로 오인해 로그인 화면으로 튕기지 말 것.** 토큰이 유효한데도 429(쿼터)·404(미구현) 등으로 로그인 루프가 발생하는 흔한 버그다.
+
+### SSE 스트리밍 중 오류
+스트리밍이 **시작된 뒤**(200 + 헤더 전송 후) 발생한 오류는 상태코드를 못 바꾸므로 이벤트로 통지한다:
+- `POST /chat`: `data: {"error":"...","done":true}`
+- `POST /agent/chat`: `event: error` / `data: {"error":{"code":"backend_error","message":"..."}}`
+
+스트리밍 **시작 전** 오류(검증/활성 Provider 없음/쿼터 등)는 위 표대로 일반 JSON 에러(+상태코드)로 반환된다.
+
 ## 인증
 
 | 메서드·경로 | 권한 | 설명 |

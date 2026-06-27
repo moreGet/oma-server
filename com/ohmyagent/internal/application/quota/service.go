@@ -46,7 +46,10 @@ func (s *Service) Check(ctx context.Context, memberID string) error {
 		}
 		if used >= limit {
 			slog.Debug("quota exceeded", "event", "quota.check", "member_id", memberID, "window", string(w), "used", used, "limit", limit)
-			return domainquota.ErrExceeded
+			return &domainquota.ExceededError{
+				Window: w, Used: used, Limit: limit,
+				Period: domainquota.PeriodKey(w, now), ResetUTC: domainquota.ResetAfter(w, now),
+			}
 		}
 	}
 	return nil
