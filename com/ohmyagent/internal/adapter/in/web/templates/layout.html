@@ -54,6 +54,44 @@
     .mono { font-family:var(--bs-font-monospace); font-size:.82rem; background:var(--bs-tertiary-bg);
       padding:.12rem .45rem; border-radius:6px; }
 
+    /* ── 토큰 사용 도넛(일/주/월) ── */
+    .donuts { display:flex; gap:.5rem; }
+    .donut { position:relative; flex:0 0 auto; }
+    .donut svg { width:100%; height:100%; display:block; transform:rotate(-90deg); }
+    .donut svg circle { fill:none; }
+    .donut .d-track { stroke:rgba(148,163,184,.16); }
+    .donut .d-fill { stroke:#6366f1; stroke-linecap:round; transition:stroke-dasharray .6s ease; }
+    .donut .d-fill.warn { stroke:#f59e0b; }
+    .donut .d-fill.danger { stroke:#ef4444; }
+    .donut.unl .d-track { stroke:rgba(148,163,184,.22); stroke-dasharray:2 3; }
+    .donut-c { position:absolute; inset:0; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; line-height:1.05; text-align:center; }
+    .donut-c .dl { color:var(--bs-secondary-color); font-weight:700; }
+    .donut-c .dv { font-weight:700; color:var(--bs-body-color); }
+    .donut-c .dv.unl { color:var(--bs-secondary-color); }
+    /* 소형(목록 셀) */
+    .donuts-sm .donut { width:46px; height:46px; }
+    .donuts-sm svg circle { stroke-width:3.4; }
+    .donuts-sm .donut-c .dl { font-size:.58rem; }
+    .donuts-sm .donut-c .dv { font-size:.66rem; }
+    .donuts-sm .donut-c .du { display:none; }
+    /* 대형(관리 모달) */
+    .donuts-lg .donut { width:88px; height:88px; }
+    .donuts-lg svg circle { stroke-width:3; }
+    .donuts-lg .donut-c .dl { font-size:.72rem; letter-spacing:.02em; }
+    .donuts-lg .donut-c .dv { font-size:.95rem; }
+    .donuts-lg .donut-c .du { font-size:.6rem; color:var(--bs-secondary-color); margin-top:.05rem; }
+
+    /* ── 모달 탭(슬림 관리 UI) ── */
+    .modal-tabs { gap:.3rem; }
+    .modal-tabs .nav-link { padding:.34rem .5rem; font-size:.82rem; font-weight:600;
+      color:var(--bs-secondary-color); border-radius:.55rem; }
+    .modal-tabs .nav-link:hover { background:var(--bs-tertiary-bg); color:var(--bs-body-color); }
+    .modal-tabs .nav-link.active { background:#6366f1; color:#fff; }
+    .modal-tabs .nav-link.danger.active { background:#ef4444; }
+    .sect-label { font-size:.7rem; text-transform:uppercase; letter-spacing:.07em;
+      color:#5b6473; font-weight:700; }
+
     @media (max-width:860px) {
       .app { flex-direction:column; }
       .sidebar { width:100%; flex:none; height:auto; position:static; }

@@ -38,20 +38,10 @@
             {{if $m.Active}}<span class="status on"><span class="dot"></span>활성</span>
             {{else}}<span class="status off"><span class="dot"></span>비활성</span>{{end}}
           </td>
-          <td style="min-width:13rem">
-            {{range $m.Quota}}
-            <div class="d-flex align-items-center gap-1 small mb-1">
-              <span class="text-secondary" style="width:1.3em">{{.Label}}</span>
-              {{if .Unlimited}}
-              <span class="text-secondary">{{.Used}} · 무제한</span>
-              {{else}}
-              <div class="progress flex-grow-1" style="height:6px;min-width:4.5rem">
-                <div class="progress-bar{{if ge .PctUsed 90}} bg-danger{{else if ge .PctUsed 70}} bg-warning{{end}}" role="progressbar" style="width:{{.PctUsed}}%"></div>
-              </div>
-              <span class="text-secondary" style="white-space:nowrap" title="사용 {{.Used}} / 한도 {{.Limit}} · 잔여 {{.Limit}}-{{.Used}}">{{.PctUsed}}%</span>
-              {{end}}
+          <td>
+            <div class="donuts donuts-sm">
+              {{range $m.Quota}}{{template "donut" .}}{{end}}
             </div>
-            {{end}}
           </td>
           <td><small class="text-secondary">{{$m.CreatedAt}}</small></td>
           {{if $.CanManageMembers}}
@@ -70,82 +60,133 @@
 <p class="text-secondary small mt-3 mb-0">역할 제어: super_admin → admin·user, admin → user. 멤버 삭제는 super_admin 만 가능합니다.</p>
 
 {{if .CanManageMembers}}
-{{/* ── 멤버별 관리 모달 ── */}}
+{{/* ── 멤버별 관리 모달(슬림 탭 UI) ── */}}
 {{range $m := .Data.Members}}
 <div class="modal fade" id="member-{{$m.ID}}" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-person-gear me-1"></i>{{$m.Username}}
-          <span class="badge rounded-pill badge-{{$m.Role}} ms-1">{{$m.Role}}</span></h5>
+      <div class="modal-header border-0 pb-2">
+        <div class="d-flex align-items-center gap-2">
+          <span class="avatar" style="width:40px;height:40px;font-size:1rem"><i class="bi bi-person-fill"></i></span>
+          <div class="lh-1">
+            <h5 class="modal-title mb-1">{{$m.Username}}</h5>
+            <span class="badge rounded-pill badge-{{$m.Role}}">{{$m.Role}}</span>
+            {{if $m.Active}}<span class="status on ms-1"><span class="dot"></span>활성</span>
+            {{else}}<span class="status off ms-1"><span class="dot"></span>비활성</span>{{end}}
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
       </div>
-      <div class="modal-body vstack gap-3">
-        <form method="post" action="/admin/members/{{$m.ID}}/profile" class="vstack gap-2">
-          <label class="form-label small text-secondary mb-0">프로필</label>
-          <div class="row g-2">
-            <div class="col-md-6"><input type="text" name="display_name" class="form-control" value="{{$m.DisplayName}}" placeholder="표시명"></div>
-            <div class="col-md-6"><input type="text" name="organization" class="form-control" value="{{$m.Organization}}" placeholder="소속"></div>
-            <div class="col-12"><input type="email" name="email" class="form-control" value="{{$m.Email}}" placeholder="이메일"></div>
-          </div>
-          <button type="submit" class="btn btn-outline-light">프로필 저장</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/role" class="d-flex gap-2 align-items-end">
-          <div class="flex-grow-1">
-            <label class="form-label small text-secondary mb-1">역할 변경</label>
-            <select name="role_id" class="form-select">
-              {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
-            </select>
-          </div>
-          <button type="submit" class="btn btn-outline-light">변경</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/active">
-          <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
-          <button type="submit" class="btn btn-outline-secondary w-100">
-            {{if $m.Active}}<i class="bi bi-pause-circle"></i> 비활성화{{else}}<i class="bi bi-play-circle"></i> 활성화{{end}}
-          </button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/password" class="d-flex gap-2 align-items-end">
-          <div class="flex-grow-1">
-            <label class="form-label small text-secondary mb-1">비밀번호 리셋</label>
-            <input type="password" name="new_password" class="form-control" placeholder="새 비밀번호 (8자 이상)" minlength="8" required>
-          </div>
-          <button type="submit" class="btn btn-outline-light">리셋</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/token-limit" class="vstack gap-2">
-          <label class="form-label small text-secondary mb-0">토큰 한도 <span class="text-secondary">(0 = 전역 기본값 사용)</span></label>
-          <div class="row g-2">
-            <div class="col-4">
-              <label class="form-label small text-secondary mb-1">일 <span class="text-secondary">· {{$m.DailyUsed}}</span></label>
-              <input type="number" name="daily_limit" min="0" class="form-control" value="{{$m.DailyLimit}}">
+      <div class="modal-body pt-1">
+        {{/* 토큰 사용 현황(일/주/월 도넛) */}}
+        <div class="donuts donuts-lg justify-content-center mb-3">
+          {{range $m.Quota}}{{template "donut" .}}{{end}}
+        </div>
+
+        {{/* 슬림 탭 */}}
+        <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-prof-{{$m.ID}}" type="button" role="tab">프로필</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-token-{{$m.ID}}" type="button" role="tab">토큰</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-sec-{{$m.ID}}" type="button" role="tab">세션·보안</button>
+          </li>
+          {{if $.CanDeleteMembers}}
+          <li class="nav-item" role="presentation">
+            <button class="nav-link danger" data-bs-toggle="pill" data-bs-target="#tk-danger-{{$m.ID}}" type="button" role="tab"><i class="bi bi-trash"></i></button>
+          </li>
+          {{end}}
+        </ul>
+
+        <div class="tab-content">
+          {{/* 프로필 + 역할 + 활성 */}}
+          <div class="tab-pane fade show active" id="tk-prof-{{$m.ID}}" role="tabpanel">
+            <form method="post" action="/admin/members/{{$m.ID}}/profile" class="vstack gap-2 mb-3">
+              <div class="row g-2">
+                <div class="col-md-6"><input type="text" name="display_name" class="form-control" value="{{$m.DisplayName}}" placeholder="표시명"></div>
+                <div class="col-md-6"><input type="text" name="organization" class="form-control" value="{{$m.Organization}}" placeholder="소속"></div>
+                <div class="col-12"><input type="email" name="email" class="form-control" value="{{$m.Email}}" placeholder="이메일"></div>
+              </div>
+              <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+            </form>
+            <div class="row g-2">
+              <div class="col-7">
+                <form method="post" action="/admin/members/{{$m.ID}}/role" class="d-flex gap-2">
+                  <select name="role_id" class="form-select form-select-sm">
+                    {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
+                  </select>
+                  <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">역할 변경</button>
+                </form>
+              </div>
+              <div class="col-5">
+                <form method="post" action="/admin/members/{{$m.ID}}/active">
+                  <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
+                  <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+                    {{if $m.Active}}<i class="bi bi-pause-circle me-1"></i>비활성화{{else}}<i class="bi bi-play-circle me-1"></i>활성화{{end}}
+                  </button>
+                </form>
+              </div>
             </div>
-            <div class="col-4">
-              <label class="form-label small text-secondary mb-1">주 <span class="text-secondary">· {{$m.WeeklyUsed}}</span></label>
-              <input type="number" name="weekly_limit" min="0" class="form-control" value="{{$m.WeeklyLimit}}">
-            </div>
-            <div class="col-4">
-              <label class="form-label small text-secondary mb-1">월 <span class="text-secondary">· {{$m.MonthlyUsed}}</span></label>
-              <input type="number" name="monthly_limit" min="0" class="form-control" value="{{$m.MonthlyLimit}}">
-            </div>
           </div>
-          <button type="submit" class="btn btn-outline-light">토큰 한도 저장</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/quota-reset" onsubmit="return confirm('{{$m.Username}} 의 토큰 사용량을 초기화할까요?');">
-          <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-arrow-counterclockwise"></i> 사용량 초기화</button>
-        </form>
-        <form method="post" action="/admin/members/{{$m.ID}}/session-limit" class="d-flex gap-2 align-items-end">
-          <div class="flex-grow-1">
-            <label class="form-label small text-secondary mb-1">최대 세션 수 <span class="text-secondary">(0 = 전역 기본값)</span></label>
-            <input type="number" name="max_sessions" min="0" class="form-control" value="{{$m.SessionLimit}}">
+
+          {{/* 토큰 한도 + 사용량 초기화 */}}
+          <div class="tab-pane fade" id="tk-token-{{$m.ID}}" role="tabpanel">
+            <form method="post" action="/admin/members/{{$m.ID}}/token-limit" class="vstack gap-2">
+              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값)</span></span>
+              <div class="row g-2">
+                <div class="col-4">
+                  <label class="form-label small text-secondary mb-1">일 <span class="text-secondary">· {{$m.DailyUsed}}</span></label>
+                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" value="{{$m.DailyLimit}}">
+                </div>
+                <div class="col-4">
+                  <label class="form-label small text-secondary mb-1">주 <span class="text-secondary">· {{$m.WeeklyUsed}}</span></label>
+                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" value="{{$m.WeeklyLimit}}">
+                </div>
+                <div class="col-4">
+                  <label class="form-label small text-secondary mb-1">월 <span class="text-secondary">· {{$m.MonthlyUsed}}</span></label>
+                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" value="{{$m.MonthlyLimit}}">
+                </div>
+              </div>
+              <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>토큰 한도 저장</button>
+            </form>
+            <hr class="my-3">
+            <form method="post" action="/admin/members/{{$m.ID}}/quota-reset" onsubmit="return confirm('{{$m.Username}} 의 토큰 사용량을 초기화할까요?');">
+              <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-arrow-counterclockwise me-1"></i>사용량 초기화</button>
+            </form>
           </div>
-          <button type="submit" class="btn btn-outline-light">저장</button>
-        </form>
-        {{if $.CanDeleteMembers}}
-        <hr class="my-1">
-        <form method="post" action="/admin/members/{{$m.ID}}/delete" onsubmit="return confirm('정말 이 멤버를 삭제할까요?');">
-          <button type="submit" class="btn btn-outline-danger w-100"><i class="bi bi-trash"></i> 멤버 삭제</button>
-        </form>
-        {{end}}
+
+          {{/* 세션 한도 + 비밀번호 리셋 */}}
+          <div class="tab-pane fade" id="tk-sec-{{$m.ID}}" role="tabpanel">
+            <form method="post" action="/admin/members/{{$m.ID}}/session-limit" class="vstack gap-2 mb-3">
+              <span class="sect-label">최대 세션 수 <span class="text-secondary text-lowercase">(0 = 전역 기본값)</span></span>
+              <div class="d-flex gap-2">
+                <input type="number" name="max_sessions" min="0" class="form-control form-control-sm" value="{{$m.SessionLimit}}">
+                <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">저장</button>
+              </div>
+            </form>
+            <form method="post" action="/admin/members/{{$m.ID}}/password" class="vstack gap-2">
+              <span class="sect-label">비밀번호 리셋</span>
+              <div class="d-flex gap-2">
+                <input type="password" name="new_password" class="form-control form-control-sm" placeholder="새 비밀번호 (8자 이상)" minlength="8" required>
+                <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">리셋</button>
+              </div>
+            </form>
+          </div>
+
+          {{/* 위험 구역 */}}
+          {{if $.CanDeleteMembers}}
+          <div class="tab-pane fade" id="tk-danger-{{$m.ID}}" role="tabpanel">
+            <span class="sect-label text-danger">위험 구역</span>
+            <p class="small text-secondary mt-1 mb-2">멤버를 삭제하면 되돌릴 수 없습니다.</p>
+            <form method="post" action="/admin/members/{{$m.ID}}/delete" onsubmit="return confirm('정말 이 멤버를 삭제할까요?');">
+              <button type="submit" class="btn btn-outline-danger btn-sm w-100"><i class="bi bi-trash me-1"></i>{{$m.Username}} 멤버 삭제</button>
+            </form>
+          </div>
+          {{end}}
+        </div>
       </div>
     </div>
   </div>
@@ -191,4 +232,19 @@
   </div>
 </div>
 {{end}}
+{{end}}
+
+{{/* ── 토큰 사용 도넛(memberQuotaView): 일/주/월 각각 1개, 가운데 라벨+퍼센트 ── */}}
+{{define "donut"}}
+<div class="donut{{if .Unlimited}} unl{{end}}" title="{{.Label}} · 사용 {{.Used}}{{if not .Unlimited}} / 한도 {{.Limit}}{{end}}">
+  <svg viewBox="0 0 36 36">
+    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
+    {{if not .Unlimited}}<circle class="d-fill{{if ge .PctUsed 90}} danger{{else if ge .PctUsed 70}} warn{{end}}" cx="18" cy="18" r="15.9155" stroke-dasharray="{{.PctUsed}} 100"></circle>{{end}}
+  </svg>
+  <div class="donut-c">
+    <span class="dl">{{.Label}}</span>
+    {{if .Unlimited}}<span class="dv unl">∞</span><span class="du">무제한</span>
+    {{else}}<span class="dv">{{.PctUsed}}%</span><span class="du">{{.Used}}/{{.Limit}}</span>{{end}}
+  </div>
+</div>
 {{end}}
