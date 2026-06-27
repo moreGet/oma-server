@@ -135,7 +135,7 @@ API 키는 **둘 중 하나**로 등록:
 
 - **HTTP 서버**: keep-alive `IdleTimeout`(120s)·`ReadHeaderTimeout`(10s, slowloris 완화). SSE 핸들러는 write deadline 을 해제해 장시간 스트리밍 유지.
 - **DB 풀**: `MaxIdleConns = MaxOpenConns`(기본 2 → 부하 시 커넥션 churn 제거), `ConnMaxLifetime`(30m)·`ConnMaxIdleTime`(5m)로 스테일 커넥션 정리. mysql 풀 크기는 `max_open_conns`(prod 기본 20)로 조정.
-- **토큰 쿼터 핫패스**: chat/agent 요청마다 일·주·월 사용량을 윈도우별 개별 조회 대신 **IN 절 단일 쿼리**(`UsageForPeriods`)로 묶어 DB 왕복을 줄인다(시행 `Check`·조회 `/me/quota` 공통). 무제한(한도 0) 윈도우는 조회 자체를 생략.
+- **토큰 쿼터 핫패스**(대규모 동접 채팅): chat/agent 요청마다 일·주·월 사용량을 윈도우별 개별 조회 대신 **IN 절 단일 쿼리**(`UsageForPeriods`)로 묶고(시행 `Check`·조회 `/me/quota`), 응답 후 누적도 **멀티로우 upsert 단일 쿼리**(`AddUsage`)로 묶어 채팅당 쿼터 DB 왕복을 절반 이하로 줄인다. 무제한(한도 0) 윈도우는 조회 자체를 생략. 토큰 추정 폴백 텍스트(대화 전체 연결)는 **usage 미제공 시에만 지연 생성**(정상 경로 할당 회피).
 - **LLM 업스트림**: 모든 외부 어댑터가 **공유 HTTP 클라이언트**(Transport `MaxIdleConns=256`·`MaxIdleConnsPerHost=64`, HTTP/2)로 OpenAI/Claude/Gemini 커넥션을 재사용(기본 2 병목 제거). 전역 타임아웃 없이 ctx 로 취소(SSE 장기 스트리밍 보존).
 - **활성 Provider 캐시**: 질의마다 DB 조회 없이 `atomic.Value` 캐시에서 활성 Provider 해석.
 - **할당 절감(GC)**: 대화 이력·세션 본문 gzip 저장 경로가 `gzip.Writer` 를 **`sync.Pool`** 로 재사용해 요청당 압축기 재할당을 제거(고동접 GC 압력 완화). 응답 본문 이력 저장은 비차단 비동기 큐.

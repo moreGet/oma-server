@@ -24,12 +24,13 @@ type quotaChecker interface {
 	Add(ctx context.Context, memberID string, tokens int)
 }
 
-// quotaTokens 는 실측 total(>0)을 우선하고, usage 미제공(0) 시 prompt+response 텍스트로 추정한다.
-func quotaTokens(total int, text string) int {
+// quotaTokens 는 실측 total(>0)을 우선하고, usage 미제공(0) 시에만 estimate() 텍스트로 추정한다.
+// estimate 는 지연 호출이라, usage 를 주는 정상 경로(대다수)에서 대화 전체를 잇는 큰 문자열 생성을 피한다.
+func quotaTokens(total int, estimate func() string) int {
 	if total > 0 {
 		return total
 	}
-	return domainquota.EstimateTokens(text)
+	return domainquota.EstimateTokens(estimate())
 }
 
 // ChatHandler 는 /api/v1/chat 질의(클라이언트 → 활성 LLM → SSE 응답) 핸들러다.
@@ -128,7 +129,7 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		if usage != nil {
 			total = usage.TotalTokens
 		}
-		h.quota.Add(r.Context(), claims.MemberID, quotaTokens(total, req.promptText()+response))
+		h.quota.Add(r.Context(), claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
 	}
 
 	// 조각이 하나도 없던 경우에도 SSE 응답 형태를 유지한다.

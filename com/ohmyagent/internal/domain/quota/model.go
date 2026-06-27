@@ -129,10 +129,9 @@ type Snapshot struct {
 
 // Repository — out 포트(사용량/한도 영속화).
 type Repository interface {
-	// AddUsage 는 member/period 사용량을 원자적으로 += tokens 한다(없으면 생성).
-	AddUsage(ctx context.Context, memberID, period string, tokens int) error
-	// GetUsage 는 member/period 누적 사용량을 반환한다(없으면 0).
-	GetUsage(ctx context.Context, memberID, period string) (int, error)
+	// AddUsage 는 member 의 여러 period 사용량을 단일 멀티로우 upsert 로 원자적으로 += tokens 한다.
+	// 채팅 완료당 일/주/월 카운터를 한 번의 DB 왕복으로 누적한다(없으면 생성).
+	AddUsage(ctx context.Context, memberID string, periods []string, tokens int) error
 	// UsageForPeriods 는 member 의 여러 period 사용량을 한 번에 조회한다(없는 period 는 맵에서 생략=0).
 	// 핫패스(일/주/월 동시 시행)에서 윈도우당 개별 조회 대신 단일 왕복으로 줄인다.
 	UsageForPeriods(ctx context.Context, memberID string, periods []string) (map[string]int, error)

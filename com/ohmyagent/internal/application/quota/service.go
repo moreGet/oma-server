@@ -67,16 +67,18 @@ func (s *Service) Check(ctx context.Context, memberID string) error {
 	return nil
 }
 
-// Add 는 사용 토큰을 일/주/월 카운터에 각각 누적한다(응답 후 호출). 실패는 로깅만(요청 결과 무영향).
+// Add 는 사용 토큰을 일/주/월 카운터에 누적한다(응답 후 호출, 단일 멀티로우 upsert). 실패는 로깅만(요청 결과 무영향).
 func (s *Service) Add(ctx context.Context, memberID string, tokens int) {
 	if tokens <= 0 || memberID == "" {
 		return
 	}
 	now := s.now()
-	for _, w := range domainquota.Windows {
-		if err := s.repo.AddUsage(ctx, memberID, domainquota.PeriodKey(w, now), tokens); err != nil {
-			slog.Warn("quota add failed", "event", "quota.add", "member_id", memberID, "window", string(w), "tokens", tokens, "error", err)
-		}
+	periods := make([]string, len(domainquota.Windows))
+	for i, w := range domainquota.Windows {
+		periods[i] = domainquota.PeriodKey(w, now)
+	}
+	if err := s.repo.AddUsage(ctx, memberID, periods, tokens); err != nil {
+		slog.Warn("quota add failed", "event", "quota.add", "member_id", memberID, "tokens", tokens, "error", err)
 	}
 }
 

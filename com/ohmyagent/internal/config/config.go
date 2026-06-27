@@ -40,6 +40,29 @@ type Config struct {
 	Auth          AuthConfig          `yaml:"auth"`
 	ToolPolicy    ToolPolicyConfig    `yaml:"tool_policy"`
 	ClientVersion ClientVersionConfig `yaml:"client_version"`
+	CommandPolicy CommandPolicyConfig `yaml:"command_policy"`
+}
+
+// CommandPolicyConfig 는 서버 제어형 위험명령/경로 차단 정책(GET /api/v1/security/command-policy)이다.
+// "2중 안전" 원칙: 클라 내장 디폴트에 서버가 패턴을 추가만 한다(끄는 필드 없음). 비우면 클라 디폴트만 적용.
+type CommandPolicyConfig struct {
+	BlockedPatterns []BlockedPattern `yaml:"blocked_patterns"`
+	BlockedPaths    []BlockedPath    `yaml:"blocked_paths"`
+}
+
+// BlockedPattern 은 차단할 명령 패턴 1건이다(type 생략=substring, script_type 생략=any).
+type BlockedPattern struct {
+	Type       string `yaml:"type"`        // regex | substring
+	Pattern    string `yaml:"pattern"`     // 패턴 문자열
+	Reason     string `yaml:"reason"`      // 차단 사유(표시/로그)
+	ScriptType string `yaml:"script_type"` // any | powershell | cmd
+}
+
+// BlockedPath 는 차단할 경로 패턴 1건이다(type 생략=substring).
+type BlockedPath struct {
+	Type    string `yaml:"type"`    // regex | substring
+	Pattern string `yaml:"pattern"` // 경로 패턴
+	Reason  string `yaml:"reason"`  // 차단 사유
 }
 
 // ToolPolicyConfig 는 클라이언트 도구 실행 정책(GET /api/v1/tools/policy)이다.

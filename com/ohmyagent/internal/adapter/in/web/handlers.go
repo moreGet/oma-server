@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
@@ -14,9 +15,12 @@ import (
 	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
 
-// uiTimeFormat 은 어드민 웹 UI 시간 표기 포맷이다(읽기 쉬운 UTC, ISO 'T' 미사용).
-// JSON API 는 별도로 RFC3339(T 규격) 를 유지한다 — 여기는 화면 표시 전용.
+// uiTimeFormat 은 어드민 웹 UI 시간 표기 포맷이다(읽기 쉬운 KST, ISO 'T' 미사용).
+// JSON API 는 별도로 RFC3339(T 규격, UTC) 를 유지한다 — 여기는 화면 표시 전용.
 const uiTimeFormat = "2006-01-02 15:04:05"
+
+// kstZone 은 한국 표준시(UTC+9, DST 없음)다. tzdata 의존 없이 고정 오프셋으로 표시한다.
+var kstZone = time.FixedZone("KST", 9*60*60)
 
 // --- 뷰 데이터 ---
 
@@ -643,7 +647,7 @@ func toMemberViews(ms []domainauth.Member) []memberView {
 	for _, m := range ms {
 		out = append(out, memberView{
 			ID: m.ID, Username: m.Username, Role: m.Role.Name, Level: int(m.Role.Level),
-			Active: m.Active, CreatedAt: m.CreatedAt.UTC().Format(uiTimeFormat),
+			Active: m.Active, CreatedAt: m.CreatedAt.In(kstZone).Format(uiTimeFormat),
 			Email: m.Email, DisplayName: m.DisplayName, Organization: m.Organization,
 		})
 	}

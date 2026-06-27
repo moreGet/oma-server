@@ -25,33 +25,27 @@ func NewQuotaRepository(conn *sql.DB, driver string) *QuotaRepository {
 	return &QuotaRepository{db: conn, driver: driver}
 }
 
-// AddUsage 는 member/period 사용량을 원자적으로 += tokens 한다.
-func (r *QuotaRepository) AddUsage(ctx context.Context, memberID, period string, tokens int) error {
-	var q string
-	if r.driver == "mysql" {
-		q = "INSERT INTO token_usage (member_id, period, used_tokens) VALUES (?,?,?) " +
-			"ON DUPLICATE KEY UPDATE used_tokens = used_tokens + VALUES(used_tokens)"
-	} else { // sqlite
-		q = "INSERT INTO token_usage (member_id, period, used_tokens) VALUES (?,?,?) " +
-			"ON CONFLICT(member_id, period) DO UPDATE SET used_tokens = used_tokens + excluded.used_tokens"
+// AddUsage 는 member 의 여러 period 사용량을 단일 멀티로우 upsert 로 원자적으로 += tokens 한다.
+// driver 별 atomic upsert 라 다중 인스턴스 동시 누적에도 정확하다.
+func (r *QuotaRepository) AddUsage(ctx context.Context, memberID string, periods []string, tokens int) error {
+	if len(periods) == 0 || tokens <= 0 {
+		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, q, memberID, period, tokens); err != nil {
+	vals := make([]string, len(periods))
+	args := make([]any, 0, len(periods)*3)
+	for i, p := range periods {
+		vals[i] = "(?,?,?)"
+		args = append(args, memberID, p, tokens)
+	}
+	tail := " ON CONFLICT(member_id, period) DO UPDATE SET used_tokens = used_tokens + excluded.used_tokens" // sqlite
+	if r.driver == "mysql" {
+		tail = " ON DUPLICATE KEY UPDATE used_tokens = used_tokens + VALUES(used_tokens)"
+	}
+	q := "INSERT INTO token_usage (member_id, period, used_tokens) VALUES " + strings.Join(vals, ",") + tail
+	if _, err := r.db.ExecContext(ctx, q, args...); err != nil {
 		return fmt.Errorf("quota: add usage: %w", err)
 	}
 	return nil
-}
-
-// GetUsage 는 member/period 누적 사용량을 반환한다(없으면 0).
-func (r *QuotaRepository) GetUsage(ctx context.Context, memberID, period string) (int, error) {
-	var used int
-	err := r.db.QueryRowContext(ctx, "SELECT used_tokens FROM token_usage WHERE member_id=? AND period=?", memberID, period).Scan(&used)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("quota: get usage: %w", err)
-	}
-	return used, nil
 }
 
 // UsageForPeriods 는 member 의 여러 period 사용량을 IN 절 단일 쿼리로 조회한다(없는 period 는 맵에서 생략).

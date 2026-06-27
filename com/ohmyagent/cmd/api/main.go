@@ -162,12 +162,24 @@ func run() error {
 	statsH := httpin.NewStatsHandler(authUC, providerUC)
 	quotaH := httpin.NewQuotaHandler(quotaService)
 	projectH := httpin.NewProjectHandler(projectService)
+	cmdPolicy := httpin.CommandPolicyConfig{}
+	for _, p := range cfg.CommandPolicy.BlockedPatterns {
+		cmdPolicy.BlockedPatterns = append(cmdPolicy.BlockedPatterns, httpin.CommandBlockedPattern{
+			Type: p.Type, Pattern: p.Pattern, Reason: p.Reason, ScriptType: p.ScriptType,
+		})
+	}
+	for _, p := range cfg.CommandPolicy.BlockedPaths {
+		cmdPolicy.BlockedPaths = append(cmdPolicy.BlockedPaths, httpin.CommandBlockedPath{
+			Type: p.Type, Pattern: p.Pattern, Reason: p.Reason,
+		})
+	}
 	clientH := httpin.NewClientHandler(
 		httpin.ToolPolicyConfig{Mode: cfg.ToolPolicy.Mode, Enabled: cfg.ToolPolicy.Enabled, Disabled: cfg.ToolPolicy.Disabled},
 		httpin.ClientVersionConfig{
 			Latest: cfg.ClientVersion.Latest, MinimumSupported: cfg.ClientVersion.MinimumSupported,
 			DownloadURL: cfg.ClientVersion.DownloadURL, Notice: cfg.ClientVersion.Notice, Mandatory: cfg.ClientVersion.Mandatory,
 		},
+		cmdPolicy,
 	)
 	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
@@ -219,6 +231,8 @@ func run() error {
 	router.Secured("GET /api/v1/tools/policy", httpin.HandleAgent(clientH.ToolsPolicy), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/tools/authorize", httpin.HandleAgent(clientH.ToolsAuthorize), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/client/version", httpin.HandleAgent(clientH.ClientVersion), security.MinRole(domainauth.RoleLevelUser))
+	// 서버 제어형 위험명령/경로 차단 패턴(클라 디폴트에 추가만 — 2중 안전). 미설정 시 빈 목록.
+	router.Secured("GET /api/v1/security/command-policy", httpin.HandleAgent(clientH.CommandPolicy), security.MinRole(domainauth.RoleLevelUser))
 
 	// 채팅 히스토리 서버 동기화(소유권 스코프).
 	router.Secured("GET /api/v1/agent/sessions", httpin.HandleAgent(sessionH.List), security.MinRole(domainauth.RoleLevelUser))

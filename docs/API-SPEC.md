@@ -4,7 +4,7 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 
 **에러 envelope (두 종류)**
 - **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
-- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**): `{ "error": { "code": "bad_request", "message": "..." } }`
+- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**): `{ "error": { "code": "bad_request", "message": "..." } }`
   소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
 
 ---
@@ -267,16 +267,43 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 
 > 서버는 세션 `data` 를 불투명 JSON 으로 보관(소유자·시각만 관리). 클라이언트가 로컬 영속 대신/병행 사용 가능.
 
-### 도구 정책 / 클라이언트 버전 (user, 선택 기능 · 설정 기반)
-서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략). 값은 `config`(`tool_policy`·`client_version`, yaml/env)에서 주입.
+### 도구 정책 / 클라이언트 버전 / 명령 보안 (user, 선택 기능 · 설정 기반)
+서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략, 명령 보안=클라 디폴트만). 값은 `config`(`tool_policy`·`client_version`·`command_policy`, yaml/env)에서 주입.
 
 | 메서드·경로 | 기능 |
 |---|---|
 | `GET /api/v1/tools/policy` | 도구 실행 정책 `{mode, enabled, disabled}`. `mode`=`cached`\|`realtime`(그 외 cached 간주), `enabled`=null이면 전체 허용, `disabled` 우선 |
 | `POST /api/v1/tools/authorize` | (realtime) 도구 1회 인가. body `{tool, arguments?}` → `{allowed, reason}`. disabled 우선 → enabled 화이트리스트 → 그 외 허용 |
 | `GET /api/v1/client/version` | 클라 버전 점검 `{latest, minimum_supported, download_url?, notice?, mandatory}`(SemVer). 클라가 자기 버전과 비교해 업데이트 알림 |
+| `GET /api/v1/security/command-policy` | 서버 추가 위험명령/경로 차단 패턴 `{blocked_patterns[], blocked_paths[]}`. 클라 내장 디폴트에 **추가만**(2중 안전). 미설정 시 빈 배열 |
 
-> `cached` 모드면 정책은 **로그인 시 1회** 로드(세션 캐시). `enabled`/`disabled`는 nil이면 응답에서 `null`(=전체 허용). `download_url`/`notice`는 빈 값이면 응답에서 생략. 상세 계약은 클라 `docs/server-tool-policy-api.md`·`server-version-api.md` 참조.
+> `cached` 모드면 정책은 **로그인 시 1회** 로드(세션 캐시). `enabled`/`disabled`는 nil이면 응답에서 `null`(=전체 허용). `download_url`/`notice`는 빈 값이면 응답에서 생략. 상세 계약은 클라 `docs/server-tool-policy-api.md`·`server-version-api.md`·`server-controlled-security-and-tools.md` 참조.
+
+#### `GET /api/v1/security/command-policy` (user) — 서버 제어형 위험명령 차단
+**2중 안전 원칙**: 클라이언트 내장 디폴트 블랙리스트는 항상 적용되고, 서버는 패턴을 **추가만** 한다(끄는 필드 없음). 로그인 시 1회 로드·세션 캐시. 미구현/오프라인이면 클라 디폴트만으로 정상 동작.
+
+응답 200 (중첩 envelope 경로):
+```json
+{
+  "blocked_patterns": [
+    { "type": "regex",     "pattern": "\\bnet\\s+user\\b", "reason": "사용자 계정 조작 금지", "script_type": "any" },
+    { "type": "substring", "pattern": "bcdedit",            "reason": "부트 설정 변조 금지",   "script_type": "powershell" }
+  ],
+  "blocked_paths": [
+    { "type": "substring", "pattern": "D:\\\\sensitive", "reason": "민감 디렉토리 접근 금지" }
+  ]
+}
+```
+
+| 필드 | 값 | 설명 |
+|---|---|---|
+| `type` | `regex` \| `substring` | 매칭 방식. 서버가 정규화(미지정/이상값 → `substring` 안전 기본) |
+| `pattern` | string | 패턴(빈 값은 응답에서 제외) |
+| `reason` | string | 차단 사유(표시/로그). 빈 값이면 생략 |
+| `script_type` | `any` \| `powershell` \| `cmd` | 적용 셸(`blocked_patterns`만). 미지정/이상값 → `any` |
+
+- **설정**: `config.command_policy.blocked_patterns` / `blocked_paths`(yaml). 비우면 `{"blocked_patterns":[],"blocked_paths":[]}`.
+- 서버는 도구 끄는 필드를 두지 않는다(디폴트 약화 불가) — 2중 안전.
 
 ---
 

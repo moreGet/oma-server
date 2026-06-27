@@ -22,12 +22,11 @@ func newFakeRepo(def domainquota.Limits) *fakeRepo {
 }
 func uk(m, p string) string { return m + "|" + p }
 
-func (r *fakeRepo) AddUsage(_ context.Context, m, p string, t int) error {
-	r.usage[uk(m, p)] += t
+func (r *fakeRepo) AddUsage(_ context.Context, m string, periods []string, t int) error {
+	for _, p := range periods {
+		r.usage[uk(m, p)] += t
+	}
 	return nil
-}
-func (r *fakeRepo) GetUsage(_ context.Context, m, p string) (int, error) {
-	return r.usage[uk(m, p)], nil
 }
 func (r *fakeRepo) UsageForPeriods(_ context.Context, m string, periods []string) (map[string]int, error) {
 	out := make(map[string]int, len(periods))

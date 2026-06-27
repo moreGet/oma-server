@@ -26,3 +26,11 @@ client_version:
   download_url: ""   # 사내 배포 위치(비우면 응답에서 생략)
   notice: ""         # 사용자 안내(비우면 생략)
   mandatory: false
+# 서버 제어형 위험명령/경로 차단 (GET /api/v1/security/command-policy).
+# "2중 안전": 클라 내장 디폴트에 아래 패턴을 추가만 한다(끄지는 못함). 비우면 클라 디폴트만 적용.
+command_policy:
+  # blocked_patterns:
+  #   - { type: regex,     pattern: "\\bnet\\s+user\\b", reason: "사용자 계정 조작 금지", script_type: any }
+  #   - { type: substring, pattern: "bcdedit",            reason: "부트 설정 변조 금지",   script_type: powershell }
+  # blocked_paths:
+  #   - { type: substring, pattern: "D:\\sensitive", reason: "민감 디렉토리 접근 금지" }

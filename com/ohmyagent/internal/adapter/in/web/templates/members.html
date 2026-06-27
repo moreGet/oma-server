@@ -27,7 +27,7 @@
   <div class="table-responsive">
     <table class="table table-hover align-middle mb-0">
       <thead>
-        <tr><th>아이디</th><th>역할</th><th>상태</th><th>토큰 사용 <small class="text-secondary fw-normal">(일/주/월)</small></th><th>생성일</th>{{if .CanManageMembers}}<th class="text-end">작업</th>{{end}}</tr>
+        <tr><th>아이디</th><th>역할</th><th>상태</th><th>토큰 사용 <small class="text-secondary fw-normal">(일/주/월)</small></th><th>생성일 <small class="text-secondary fw-normal">(KST)</small></th>{{if .CanManageMembers}}<th class="text-end">작업</th>{{end}}</tr>
       </thead>
       <tbody>
         {{range $m := .Data.Members}}
@@ -109,7 +109,7 @@
               <dt class="col-4 text-secondary fw-normal">표시명</dt><dd class="col-8 mb-0">{{if $m.DisplayName}}{{$m.DisplayName}}{{else}}<span class="text-secondary">—</span>{{end}}</dd>
               <dt class="col-4 text-secondary fw-normal">소속</dt><dd class="col-8 mb-0">{{if $m.Organization}}{{$m.Organization}}{{else}}<span class="text-secondary">—</span>{{end}}</dd>
               <dt class="col-4 text-secondary fw-normal">이메일</dt><dd class="col-8 mb-0">{{if $m.Email}}{{$m.Email}}{{else}}<span class="text-secondary">—</span>{{end}}</dd>
-              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">{{$m.CreatedAt}}</dd>
+              <dt class="col-4 text-secondary fw-normal">가입일 <small>(KST)</small></dt><dd class="col-8 mb-0">{{$m.CreatedAt}}</dd>
             </dl>
           </div>
 
