@@ -43,12 +43,16 @@ func TestRenderMembersPage(t *testing.T) {
 
 	for _, want := range []string{
 		`class="donuts donuts-sm"`,       // 목록 셀 도넛
-		`class="donuts donuts-lg`,        // 모달 도넛
+		`class="donuts donuts-lg`,        // 요약 탭 도넛
 		`stroke-dasharray="25 100"`,      // 일 25% 호
 		`d-fill danger`,                  // 주 96% → danger
 		`<span class="dv unl">∞</span>`,  // 월 무제한
-		`data-bs-target="#tk-token-m1"`,  // 슬림 탭
+		`data-bs-target="#tk-sum-m1"`,    // 요약 탭(첫 탭)
+		`data-bs-target="#tk-token-m1"`,  // 토큰 탭
 		`data-bs-target="#tk-danger-m1"`, // 삭제 탭(super_admin)
+		`type="range"`,                   // 토큰 한도 슬라이더
+		`name="daily_limit"`,             // 슬라이더와 짝지은 수치 입력
+		`form="prof-m1"`,                 // 하단 분리된 프로필 저장 버튼
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("렌더 결과에 %q 누락", want)

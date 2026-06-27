@@ -78,15 +78,13 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
       </div>
       <div class="modal-body pt-1">
-        {{/* 토큰 사용 현황(일/주/월 도넛) */}}
-        <div class="donuts donuts-lg justify-content-center mb-3">
-          {{range $m.Quota}}{{template "donut" .}}{{end}}
-        </div>
-
         {{/* 슬림 탭 */}}
         <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
           <li class="nav-item" role="presentation">
-            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-prof-{{$m.ID}}" type="button" role="tab">프로필</button>
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-sum-{{$m.ID}}" type="button" role="tab">요약</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-prof-{{$m.ID}}" type="button" role="tab">프로필</button>
           </li>
           <li class="nav-item" role="presentation">
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-token-{{$m.ID}}" type="button" role="tab">토큰</button>
@@ -102,52 +100,79 @@
         </ul>
 
         <div class="tab-content">
-          {{/* 프로필 + 역할 + 활성 */}}
-          <div class="tab-pane fade show active" id="tk-prof-{{$m.ID}}" role="tabpanel">
-            <form method="post" action="/admin/members/{{$m.ID}}/profile" class="vstack gap-2 mb-3">
-              <div class="row g-2">
-                <div class="col-md-6"><input type="text" name="display_name" class="form-control" value="{{$m.DisplayName}}" placeholder="표시명"></div>
-                <div class="col-md-6"><input type="text" name="organization" class="form-control" value="{{$m.Organization}}" placeholder="소속"></div>
-                <div class="col-12"><input type="email" name="email" class="form-control" value="{{$m.Email}}" placeholder="이메일"></div>
+          {{/* 1. 프로필 요약 — 도넛(일/주/월) + 읽기전용 정보 */}}
+          <div class="tab-pane fade show active" id="tk-sum-{{$m.ID}}" role="tabpanel">
+            <div class="donuts donuts-lg justify-content-center my-2">
+              {{range $m.Quota}}{{template "donut" .}}{{end}}
+            </div>
+            <dl class="row small mb-0 mt-3 gy-1">
+              <dt class="col-4 text-secondary fw-normal">표시명</dt><dd class="col-8 mb-0">{{if $m.DisplayName}}{{$m.DisplayName}}{{else}}<span class="text-secondary">—</span>{{end}}</dd>
+              <dt class="col-4 text-secondary fw-normal">소속</dt><dd class="col-8 mb-0">{{if $m.Organization}}{{$m.Organization}}{{else}}<span class="text-secondary">—</span>{{end}}</dd>
+              <dt class="col-4 text-secondary fw-normal">이메일</dt><dd class="col-8 mb-0">{{if $m.Email}}{{$m.Email}}{{else}}<span class="text-secondary">—</span>{{end}}</dd>
+              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">{{$m.CreatedAt}}</dd>
+            </dl>
+          </div>
+
+          {{/* 2. 프로필 편집 — 전부 세로 나열, 저장·활성 버튼은 맨 하단 분리 */}}
+          <div class="tab-pane fade" id="tk-prof-{{$m.ID}}" role="tabpanel">
+            <form id="prof-{{$m.ID}}" method="post" action="/admin/members/{{$m.ID}}/profile" class="vstack gap-2">
+              <div>
+                <label class="form-label small text-secondary mb-1">표시명</label>
+                <input type="text" name="display_name" class="form-control form-control-sm" value="{{$m.DisplayName}}" placeholder="표시명">
               </div>
-              <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+              <div>
+                <label class="form-label small text-secondary mb-1">소속</label>
+                <input type="text" name="organization" class="form-control form-control-sm" value="{{$m.Organization}}" placeholder="소속">
+              </div>
+              <div>
+                <label class="form-label small text-secondary mb-1">이메일</label>
+                <input type="email" name="email" class="form-control form-control-sm" value="{{$m.Email}}" placeholder="이메일">
+              </div>
             </form>
-            <div class="row g-2">
-              <div class="col-7">
-                <form method="post" action="/admin/members/{{$m.ID}}/role" class="d-flex gap-2">
-                  <select name="role_id" class="form-select form-select-sm">
-                    {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
-                  </select>
-                  <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">역할 변경</button>
-                </form>
-              </div>
-              <div class="col-5">
-                <form method="post" action="/admin/members/{{$m.ID}}/active">
-                  <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
-                  <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
-                    {{if $m.Active}}<i class="bi bi-pause-circle me-1"></i>비활성화{{else}}<i class="bi bi-play-circle me-1"></i>활성화{{end}}
-                  </button>
-                </form>
-              </div>
+            <hr class="my-3">
+            <form method="post" action="/admin/members/{{$m.ID}}/role" class="vstack gap-2">
+              <label class="form-label small text-secondary mb-0">역할 변경</label>
+              <select name="role_id" class="form-select form-select-sm">
+                {{range $.Data.Roles}}<option value="{{.ID}}" {{if eq .Name $m.Role}}selected{{end}}>{{.Name}}</option>{{end}}
+              </select>
+              <button type="submit" class="btn btn-outline-light btn-sm">역할 변경</button>
+            </form>
+            <hr class="my-3">
+            {{/* 맨 하단: 프로필 저장 + 활성/비활성 (세로) */}}
+            <div class="vstack gap-2">
+              <button type="submit" form="prof-{{$m.ID}}" class="btn btn-outline-light btn-sm"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+              <form method="post" action="/admin/members/{{$m.ID}}/active">
+                <input type="hidden" name="active" value="{{if $m.Active}}false{{else}}true{{end}}">
+                <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+                  {{if $m.Active}}<i class="bi bi-pause-circle me-1"></i>비활성화{{else}}<i class="bi bi-play-circle me-1"></i>활성화{{end}}
+                </button>
+              </form>
             </div>
           </div>
 
           {{/* 토큰 한도 + 사용량 초기화 */}}
           <div class="tab-pane fade" id="tk-token-{{$m.ID}}" role="tabpanel">
-            <form method="post" action="/admin/members/{{$m.ID}}/token-limit" class="vstack gap-2">
-              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값)</span></span>
-              <div class="row g-2">
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">일 <span class="text-secondary">· {{$m.DailyUsed}}</span></label>
-                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" value="{{$m.DailyLimit}}">
+            <form method="post" action="/admin/members/{{$m.ID}}/token-limit" class="vstack gap-3">
+              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값 · 슬라이더 또는 직접 입력)</span></span>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 {{$m.DailyUsed}}</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="{{$m.DailyLimit}}" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="일 토큰 한도 슬라이더">
+                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="{{$m.DailyLimit}}" oninput="this.previousElementSibling.value=this.value">
                 </div>
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">주 <span class="text-secondary">· {{$m.WeeklyUsed}}</span></label>
-                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" value="{{$m.WeeklyLimit}}">
+              </div>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 {{$m.WeeklyUsed}}</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="{{$m.WeeklyLimit}}" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="주 토큰 한도 슬라이더">
+                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="{{$m.WeeklyLimit}}" oninput="this.previousElementSibling.value=this.value">
                 </div>
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">월 <span class="text-secondary">· {{$m.MonthlyUsed}}</span></label>
-                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" value="{{$m.MonthlyLimit}}">
+              </div>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 {{$m.MonthlyUsed}}</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="{{$m.MonthlyLimit}}" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="월 토큰 한도 슬라이더">
+                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="{{$m.MonthlyLimit}}" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>토큰 한도 저장</button>

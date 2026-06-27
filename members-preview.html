@@ -183,29 +183,29 @@
           <td>
             <div class="donuts donuts-sm">
               
-<div class="donut" title="일 · 사용 250 / 한도 1000">
+<div class="donut" title="일 · 사용 12500 / 한도 50000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="25 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">일</span>
-    <span class="dv">25%</span><span class="du">250/1000</span>
+    <span class="dv">25%</span><span class="du">12500/50000</span>
   </div>
 </div>
 
-<div class="donut" title="주 · 사용 4800 / 한도 5000">
+<div class="donut" title="주 · 사용 192000 / 한도 200000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     <circle class="d-fill danger" cx="18" cy="18" r="15.9155" stroke-dasharray="96 100"></circle>
   </svg>
   <div class="donut-c">
     <span class="dl">주</span>
-    <span class="dv">96%</span><span class="du">4800/5000</span>
+    <span class="dv">96%</span><span class="du">192000/200000</span>
   </div>
 </div>
 
-<div class="donut unl" title="월 · 사용 8400">
+<div class="donut unl" title="월 · 사용 840000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
     
@@ -309,48 +309,12 @@
       </div>
       <div class="modal-body pt-1">
         
-        <div class="donuts donuts-lg justify-content-center mb-3">
-          
-<div class="donut" title="일 · 사용 250 / 한도 1000">
-  <svg viewBox="0 0 36 36">
-    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
-    <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="25 100"></circle>
-  </svg>
-  <div class="donut-c">
-    <span class="dl">일</span>
-    <span class="dv">25%</span><span class="du">250/1000</span>
-  </div>
-</div>
-
-<div class="donut" title="주 · 사용 4800 / 한도 5000">
-  <svg viewBox="0 0 36 36">
-    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
-    <circle class="d-fill danger" cx="18" cy="18" r="15.9155" stroke-dasharray="96 100"></circle>
-  </svg>
-  <div class="donut-c">
-    <span class="dl">주</span>
-    <span class="dv">96%</span><span class="du">4800/5000</span>
-  </div>
-</div>
-
-<div class="donut unl" title="월 · 사용 8400">
-  <svg viewBox="0 0 36 36">
-    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
-    
-  </svg>
-  <div class="donut-c">
-    <span class="dl">월</span>
-    <span class="dv unl">∞</span><span class="du">무제한</span>
-    
-  </div>
-</div>
-
-        </div>
-
-        
         <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
           <li class="nav-item" role="presentation">
-            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-prof-m1" type="button" role="tab">프로필</button>
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-sum-m1" type="button" role="tab">요약</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-prof-m1" type="button" role="tab">프로필</button>
           </li>
           <li class="nav-item" role="presentation">
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-token-m1" type="button" role="tab">토큰</button>
@@ -367,51 +331,112 @@
 
         <div class="tab-content">
           
-          <div class="tab-pane fade show active" id="tk-prof-m1" role="tabpanel">
-            <form method="post" action="/admin/members/m1/profile" class="vstack gap-2 mb-3">
-              <div class="row g-2">
-                <div class="col-md-6"><input type="text" name="display_name" class="form-control" value="앨리스" placeholder="표시명"></div>
-                <div class="col-md-6"><input type="text" name="organization" class="form-control" value="플랫폼팀" placeholder="소속"></div>
-                <div class="col-12"><input type="email" name="email" class="form-control" value="alice@corp.io" placeholder="이메일"></div>
+          <div class="tab-pane fade show active" id="tk-sum-m1" role="tabpanel">
+            <div class="donuts donuts-lg justify-content-center my-2">
+              
+<div class="donut" title="일 · 사용 12500 / 한도 50000">
+  <svg viewBox="0 0 36 36">
+    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
+    <circle class="d-fill" cx="18" cy="18" r="15.9155" stroke-dasharray="25 100"></circle>
+  </svg>
+  <div class="donut-c">
+    <span class="dl">일</span>
+    <span class="dv">25%</span><span class="du">12500/50000</span>
+  </div>
+</div>
+
+<div class="donut" title="주 · 사용 192000 / 한도 200000">
+  <svg viewBox="0 0 36 36">
+    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
+    <circle class="d-fill danger" cx="18" cy="18" r="15.9155" stroke-dasharray="96 100"></circle>
+  </svg>
+  <div class="donut-c">
+    <span class="dl">주</span>
+    <span class="dv">96%</span><span class="du">192000/200000</span>
+  </div>
+</div>
+
+<div class="donut unl" title="월 · 사용 840000">
+  <svg viewBox="0 0 36 36">
+    <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
+    
+  </svg>
+  <div class="donut-c">
+    <span class="dl">월</span>
+    <span class="dv unl">∞</span><span class="du">무제한</span>
+    
+  </div>
+</div>
+
+            </div>
+            <dl class="row small mb-0 mt-3 gy-1">
+              <dt class="col-4 text-secondary fw-normal">표시명</dt><dd class="col-8 mb-0">앨리스</dd>
+              <dt class="col-4 text-secondary fw-normal">소속</dt><dd class="col-8 mb-0">플랫폼팀</dd>
+              <dt class="col-4 text-secondary fw-normal">이메일</dt><dd class="col-8 mb-0">alice@corp.io</dd>
+              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">2026-06-20</dd>
+            </dl>
+          </div>
+
+          
+          <div class="tab-pane fade" id="tk-prof-m1" role="tabpanel">
+            <form id="prof-m1" method="post" action="/admin/members/m1/profile" class="vstack gap-2">
+              <div>
+                <label class="form-label small text-secondary mb-1">표시명</label>
+                <input type="text" name="display_name" class="form-control form-control-sm" value="앨리스" placeholder="표시명">
               </div>
-              <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+              <div>
+                <label class="form-label small text-secondary mb-1">소속</label>
+                <input type="text" name="organization" class="form-control form-control-sm" value="플랫폼팀" placeholder="소속">
+              </div>
+              <div>
+                <label class="form-label small text-secondary mb-1">이메일</label>
+                <input type="email" name="email" class="form-control form-control-sm" value="alice@corp.io" placeholder="이메일">
+              </div>
             </form>
-            <div class="row g-2">
-              <div class="col-7">
-                <form method="post" action="/admin/members/m1/role" class="d-flex gap-2">
-                  <select name="role_id" class="form-select form-select-sm">
-                    <option value="1" selected>user</option><option value="2" >admin</option><option value="3" >super_admin</option>
-                  </select>
-                  <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">역할 변경</button>
-                </form>
-              </div>
-              <div class="col-5">
-                <form method="post" action="/admin/members/m1/active">
-                  <input type="hidden" name="active" value="false">
-                  <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
-                    <i class="bi bi-pause-circle me-1"></i>비활성화
-                  </button>
-                </form>
-              </div>
+            <hr class="my-3">
+            <form method="post" action="/admin/members/m1/role" class="vstack gap-2">
+              <label class="form-label small text-secondary mb-0">역할 변경</label>
+              <select name="role_id" class="form-select form-select-sm">
+                <option value="1" selected>user</option><option value="2" >admin</option><option value="3" >super_admin</option>
+              </select>
+              <button type="submit" class="btn btn-outline-light btn-sm">역할 변경</button>
+            </form>
+            <hr class="my-3">
+            
+            <div class="vstack gap-2">
+              <button type="submit" form="prof-m1" class="btn btn-outline-light btn-sm"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+              <form method="post" action="/admin/members/m1/active">
+                <input type="hidden" name="active" value="false">
+                <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+                  <i class="bi bi-pause-circle me-1"></i>비활성화
+                </button>
+              </form>
             </div>
           </div>
 
           
           <div class="tab-pane fade" id="tk-token-m1" role="tabpanel">
-            <form method="post" action="/admin/members/m1/token-limit" class="vstack gap-2">
-              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값)</span></span>
-              <div class="row g-2">
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">일 <span class="text-secondary">· 250</span></label>
-                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" value="1000">
+            <form method="post" action="/admin/members/m1/token-limit" class="vstack gap-3">
+              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값 · 슬라이더 또는 직접 입력)</span></span>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 12500</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="50000" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="일 토큰 한도 슬라이더">
+                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="50000" oninput="this.previousElementSibling.value=this.value">
                 </div>
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">주 <span class="text-secondary">· 4800</span></label>
-                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" value="5000">
+              </div>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 192000</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="200000" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="주 토큰 한도 슬라이더">
+                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="200000" oninput="this.previousElementSibling.value=this.value">
                 </div>
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">월 <span class="text-secondary">· 8400</span></label>
-                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" value="0">
+              </div>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 840000</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="0" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="월 토큰 한도 슬라이더">
+                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="0" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>토큰 한도 저장</button>
@@ -472,8 +497,31 @@
       </div>
       <div class="modal-body pt-1">
         
-        <div class="donuts donuts-lg justify-content-center mb-3">
+        <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-sum-m2" type="button" role="tab">요약</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-prof-m2" type="button" role="tab">프로필</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-token-m2" type="button" role="tab">토큰</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-sec-m2" type="button" role="tab">세션·보안</button>
+          </li>
           
+          <li class="nav-item" role="presentation">
+            <button class="nav-link danger" data-bs-toggle="pill" data-bs-target="#tk-danger-m2" type="button" role="tab"><i class="bi bi-trash"></i></button>
+          </li>
+          
+        </ul>
+
+        <div class="tab-content">
+          
+          <div class="tab-pane fade show active" id="tk-sum-m2" role="tabpanel">
+            <div class="donuts donuts-lg justify-content-center my-2">
+              
 <div class="donut" title="일 · 사용 740 / 한도 1000">
   <svg viewBox="0 0 36 36">
     <circle class="d-track" cx="18" cy="18" r="15.9155"></circle>
@@ -507,73 +555,75 @@
   </div>
 </div>
 
-        </div>
+            </div>
+            <dl class="row small mb-0 mt-3 gy-1">
+              <dt class="col-4 text-secondary fw-normal">표시명</dt><dd class="col-8 mb-0"><span class="text-secondary">—</span></dd>
+              <dt class="col-4 text-secondary fw-normal">소속</dt><dd class="col-8 mb-0"><span class="text-secondary">—</span></dd>
+              <dt class="col-4 text-secondary fw-normal">이메일</dt><dd class="col-8 mb-0"><span class="text-secondary">—</span></dd>
+              <dt class="col-4 text-secondary fw-normal">가입일</dt><dd class="col-8 mb-0">2026-06-22</dd>
+            </dl>
+          </div>
 
-        
-        <ul class="nav nav-pills nav-fill modal-tabs mb-3" role="tablist">
-          <li class="nav-item" role="presentation">
-            <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#tk-prof-m2" type="button" role="tab">프로필</button>
-          </li>
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-token-m2" type="button" role="tab">토큰</button>
-          </li>
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-sec-m2" type="button" role="tab">세션·보안</button>
-          </li>
           
-          <li class="nav-item" role="presentation">
-            <button class="nav-link danger" data-bs-toggle="pill" data-bs-target="#tk-danger-m2" type="button" role="tab"><i class="bi bi-trash"></i></button>
-          </li>
-          
-        </ul>
-
-        <div class="tab-content">
-          
-          <div class="tab-pane fade show active" id="tk-prof-m2" role="tabpanel">
-            <form method="post" action="/admin/members/m2/profile" class="vstack gap-2 mb-3">
-              <div class="row g-2">
-                <div class="col-md-6"><input type="text" name="display_name" class="form-control" value="" placeholder="표시명"></div>
-                <div class="col-md-6"><input type="text" name="organization" class="form-control" value="" placeholder="소속"></div>
-                <div class="col-12"><input type="email" name="email" class="form-control" value="" placeholder="이메일"></div>
+          <div class="tab-pane fade" id="tk-prof-m2" role="tabpanel">
+            <form id="prof-m2" method="post" action="/admin/members/m2/profile" class="vstack gap-2">
+              <div>
+                <label class="form-label small text-secondary mb-1">표시명</label>
+                <input type="text" name="display_name" class="form-control form-control-sm" value="" placeholder="표시명">
               </div>
-              <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+              <div>
+                <label class="form-label small text-secondary mb-1">소속</label>
+                <input type="text" name="organization" class="form-control form-control-sm" value="" placeholder="소속">
+              </div>
+              <div>
+                <label class="form-label small text-secondary mb-1">이메일</label>
+                <input type="email" name="email" class="form-control form-control-sm" value="" placeholder="이메일">
+              </div>
             </form>
-            <div class="row g-2">
-              <div class="col-7">
-                <form method="post" action="/admin/members/m2/role" class="d-flex gap-2">
-                  <select name="role_id" class="form-select form-select-sm">
-                    <option value="1" >user</option><option value="2" selected>admin</option><option value="3" >super_admin</option>
-                  </select>
-                  <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">역할 변경</button>
-                </form>
-              </div>
-              <div class="col-5">
-                <form method="post" action="/admin/members/m2/active">
-                  <input type="hidden" name="active" value="true">
-                  <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
-                    <i class="bi bi-play-circle me-1"></i>활성화
-                  </button>
-                </form>
-              </div>
+            <hr class="my-3">
+            <form method="post" action="/admin/members/m2/role" class="vstack gap-2">
+              <label class="form-label small text-secondary mb-0">역할 변경</label>
+              <select name="role_id" class="form-select form-select-sm">
+                <option value="1" >user</option><option value="2" selected>admin</option><option value="3" >super_admin</option>
+              </select>
+              <button type="submit" class="btn btn-outline-light btn-sm">역할 변경</button>
+            </form>
+            <hr class="my-3">
+            
+            <div class="vstack gap-2">
+              <button type="submit" form="prof-m2" class="btn btn-outline-light btn-sm"><i class="bi bi-check2 me-1"></i>프로필 저장</button>
+              <form method="post" action="/admin/members/m2/active">
+                <input type="hidden" name="active" value="true">
+                <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
+                  <i class="bi bi-play-circle me-1"></i>활성화
+                </button>
+              </form>
             </div>
           </div>
 
           
           <div class="tab-pane fade" id="tk-token-m2" role="tabpanel">
-            <form method="post" action="/admin/members/m2/token-limit" class="vstack gap-2">
-              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값)</span></span>
-              <div class="row g-2">
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">일 <span class="text-secondary">· 0</span></label>
-                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" value="0">
+            <form method="post" action="/admin/members/m2/token-limit" class="vstack gap-3">
+              <span class="sect-label">토큰 한도 <span class="text-secondary text-lowercase">(0 = 전역 기본값 · 슬라이더 또는 직접 입력)</span></span>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">일</span><span class="text-secondary">사용 0</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="0" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="일 토큰 한도 슬라이더">
+                  <input type="number" name="daily_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="0" oninput="this.previousElementSibling.value=this.value">
                 </div>
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">주 <span class="text-secondary">· 0</span></label>
-                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" value="0">
+              </div>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">주</span><span class="text-secondary">사용 0</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="0" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="주 토큰 한도 슬라이더">
+                  <input type="number" name="weekly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="0" oninput="this.previousElementSibling.value=this.value">
                 </div>
-                <div class="col-4">
-                  <label class="form-label small text-secondary mb-1">월 <span class="text-secondary">· 0</span></label>
-                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" value="0">
+              </div>
+              <div>
+                <div class="d-flex justify-content-between small mb-1"><span class="fw-semibold">월</span><span class="text-secondary">사용 0</span></div>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" min="0" max="1000000" step="1000" value="0" class="form-range flex-grow-1" oninput="this.nextElementSibling.value=this.value" aria-label="월 토큰 한도 슬라이더">
+                  <input type="number" name="monthly_limit" min="0" class="form-control form-control-sm" style="max-width:8rem" value="0" oninput="this.previousElementSibling.value=this.value">
                 </div>
               </div>
               <button type="submit" class="btn btn-outline-light btn-sm align-self-end"><i class="bi bi-check2 me-1"></i>토큰 한도 저장</button>
