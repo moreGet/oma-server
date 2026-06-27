@@ -7,12 +7,16 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	domainproject "aiagent/com/ohmyagent/internal/domain/project"
 )
+
+// gzipWriterPool 은 gzip.Writer 를 재사용한다(대화 본문 저장이 업서트마다 발생 → 매번 할당 시 GC 압력).
+var gzipWriterPool = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
 
 // maxSessionsFunc 는 멤버의 유효 최대 세션 수를 반환한다(0 = 무제한). sessionapp.Manager.EffectiveMaxSessions.
 type maxSessionsFunc func(ctx context.Context, memberID string) (int, error)
@@ -142,7 +146,9 @@ func contentKey(c domainproject.Conversation) string {
 
 func gzipBytes(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
+	zw := gzipWriterPool.Get().(*gzip.Writer)
+	defer gzipWriterPool.Put(zw)
+	zw.Reset(&buf)
 	if _, err := zw.Write(data); err != nil {
 		return nil, err
 	}

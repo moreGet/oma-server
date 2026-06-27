@@ -35,20 +35,32 @@ func (s *Service) Check(ctx context.Context, memberID string) error {
 		return err
 	}
 	now := s.now()
+	// 한도가 설정된(>0) 윈도우의 기간 키만 모아 단일 쿼리로 사용량을 조회한다(무제한 윈도우는 스킵).
+	periods := make([]string, 0, len(domainquota.Windows))
+	for _, w := range domainquota.Windows {
+		if limits.Get(w) > 0 {
+			periods = append(periods, domainquota.PeriodKey(w, now))
+		}
+	}
+	if len(periods) == 0 {
+		return nil // 전부 무제한
+	}
+	usage, err := s.repo.UsageForPeriods(ctx, memberID, periods)
+	if err != nil {
+		return err
+	}
+	// 시행 순서(일→주→월) 유지: 먼저 초과한 윈도우를 반환.
 	for _, w := range domainquota.Windows {
 		limit := limits.Get(w)
 		if limit <= 0 {
-			continue // 해당 윈도우 무제한
+			continue
 		}
-		used, err := s.repo.GetUsage(ctx, memberID, domainquota.PeriodKey(w, now))
-		if err != nil {
-			return err
-		}
-		if used >= limit {
+		period := domainquota.PeriodKey(w, now)
+		if used := usage[period]; used >= limit {
 			slog.Debug("quota exceeded", "event", "quota.check", "member_id", memberID, "window", string(w), "used", used, "limit", limit)
 			return &domainquota.ExceededError{
 				Window: w, Used: used, Limit: limit,
-				Period: domainquota.PeriodKey(w, now), ResetUTC: domainquota.ResetAfter(w, now),
+				Period: period, ResetUTC: domainquota.ResetAfter(w, now),
 			}
 		}
 	}
@@ -104,12 +116,17 @@ func (s *Service) Status(ctx context.Context, memberID string) (domainquota.Stat
 		Weekly:  domainquota.PeriodKey(domainquota.Weekly, now),
 		Monthly: domainquota.PeriodKey(domainquota.Monthly, now),
 	}}
+	periods := make([]string, len(domainquota.Windows))
+	for i, w := range domainquota.Windows {
+		periods[i] = domainquota.PeriodKey(w, now)
+	}
+	usage, err := s.repo.UsageForPeriods(ctx, memberID, periods)
+	if err != nil {
+		return domainquota.Status{}, err
+	}
 	for _, w := range domainquota.Windows {
 		limit := limits.Get(w)
-		used, err := s.repo.GetUsage(ctx, memberID, domainquota.PeriodKey(w, now))
-		if err != nil {
-			return domainquota.Status{}, err
-		}
+		used := usage[domainquota.PeriodKey(w, now)]
 		ws := domainquota.WindowStatus{Window: w, Limit: limit, Used: used, Unlimited: limit <= 0}
 		if limit > 0 {
 			if rem := limit - used; rem > 0 {

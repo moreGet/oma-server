@@ -29,6 +29,15 @@ func (r *fakeRepo) AddUsage(_ context.Context, m, p string, t int) error {
 func (r *fakeRepo) GetUsage(_ context.Context, m, p string) (int, error) {
 	return r.usage[uk(m, p)], nil
 }
+func (r *fakeRepo) UsageForPeriods(_ context.Context, m string, periods []string) (map[string]int, error) {
+	out := make(map[string]int, len(periods))
+	for _, p := range periods {
+		if v, ok := r.usage[uk(m, p)]; ok {
+			out[p] = v
+		}
+	}
+	return out, nil
+}
 func (r *fakeRepo) UsageByPeriod(_ context.Context, p string) (map[string]int, error) {
 	out := map[string]int{}
 	for k, v := range r.usage {

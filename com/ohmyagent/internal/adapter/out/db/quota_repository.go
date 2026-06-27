@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
 )
@@ -51,6 +52,37 @@ func (r *QuotaRepository) GetUsage(ctx context.Context, memberID, period string)
 		return 0, fmt.Errorf("quota: get usage: %w", err)
 	}
 	return used, nil
+}
+
+// UsageForPeriods 는 member 의 여러 period 사용량을 IN 절 단일 쿼리로 조회한다(없는 period 는 맵에서 생략).
+// period 키 포맷이 윈도우별로 달라(일=YYYY-MM-DD / 주=YYYY-Www / 월=YYYY-MM) 충돌하지 않는다.
+func (r *QuotaRepository) UsageForPeriods(ctx context.Context, memberID string, periods []string) (map[string]int, error) {
+	out := make(map[string]int, len(periods))
+	if len(periods) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(periods)+1)
+	args = append(args, memberID)
+	ph := make([]string, len(periods))
+	for i, p := range periods {
+		ph[i] = "?"
+		args = append(args, p)
+	}
+	q := "SELECT period, used_tokens FROM token_usage WHERE member_id=? AND period IN (" + strings.Join(ph, ",") + ")"
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("quota: usage for periods: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var p string
+		var v int
+		if err := rows.Scan(&p, &v); err != nil {
+			return nil, fmt.Errorf("quota: scan usage: %w", err)
+		}
+		out[p] = v
+	}
+	return out, rows.Err()
 }
 
 // UsageByPeriod 는 해당 기간 전체 멤버 사용량 맵을 반환한다.

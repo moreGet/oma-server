@@ -7,10 +7,29 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
+
+// gzipWriterPool 은 gzip.Writer 를 재사용한다(이력 저장이 요청마다 발생 → 매번 할당 시 GC 압력).
+var gzipWriterPool = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
+
+// gzipBytes 는 payload 를 풀에서 빌린 gzip.Writer 로 압축해 새 []byte 로 반환한다.
+func gzipBytes(payload []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzipWriterPool.Get().(*gzip.Writer)
+	defer gzipWriterPool.Put(zw)
+	zw.Reset(&buf)
+	if _, err := zw.Write(payload); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 // 컴파일 타임 인터페이스 만족 검증.
 var (
@@ -42,13 +61,9 @@ func (s *TranscriptStore) Save(ctx context.Context, t domaintranscript.Transcrip
 	if err != nil {
 		return fmt.Errorf("transcript: marshal content: %w", err)
 	}
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(payload); err != nil {
-		return fmt.Errorf("transcript: gzip write: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return fmt.Errorf("transcript: gzip close: %w", err)
+	content, err := gzipBytes(payload)
+	if err != nil {
+		return fmt.Errorf("transcript: gzip: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
@@ -56,7 +71,7 @@ func (s *TranscriptStore) Save(ctx context.Context, t domaintranscript.Transcrip
 		   (id, member_id, session_id, source, model, prompt_tokens, completion_tokens, total_tokens, finish_reason, content, created_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, nullString(t.MemberID), nullString(t.SessionID), string(t.Source), t.Model,
-		t.PromptTokens, t.CompletionTokens, t.TotalTokens, t.FinishReason, buf.Bytes(), t.CreatedAt.Unix(),
+		t.PromptTokens, t.CompletionTokens, t.TotalTokens, t.FinishReason, content, t.CreatedAt.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("transcript: save id=%s: %w", t.ID, err)

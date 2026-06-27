@@ -48,4 +48,17 @@ func TestQuotaRepository(t *testing.T) {
 	assert.Equal(t, 150, usageMap["m1"])
 	limitsMap, _ := repo.AllMemberLimits(ctx)
 	assert.Equal(t, domainquota.Limits{Daily: 7, Monthly: 700}, limitsMap["m1"])
+
+	// UsageForPeriods: 여러 기간을 단일 쿼리로 — 존재하는 기간만 맵에 담기고 없는 기간은 생략(=0).
+	require.NoError(t, repo.AddUsage(ctx, "m1", "2026-W26", 40))
+	multi, err := repo.UsageForPeriods(ctx, "m1", []string{"2026-06-27", "2026-W26", "2026-06"})
+	require.NoError(t, err)
+	assert.Equal(t, 150, multi["2026-06-27"])
+	assert.Equal(t, 40, multi["2026-W26"])
+	_, ok := multi["2026-06"] // 미사용 기간은 키 없음
+	assert.False(t, ok)
+	// 빈 입력은 빈 맵(쿼리 생략).
+	empty, err := repo.UsageForPeriods(ctx, "m1", nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
 }

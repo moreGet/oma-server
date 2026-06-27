@@ -133,6 +133,9 @@ type Repository interface {
 	AddUsage(ctx context.Context, memberID, period string, tokens int) error
 	// GetUsage 는 member/period 누적 사용량을 반환한다(없으면 0).
 	GetUsage(ctx context.Context, memberID, period string) (int, error)
+	// UsageForPeriods 는 member 의 여러 period 사용량을 한 번에 조회한다(없는 period 는 맵에서 생략=0).
+	// 핫패스(일/주/월 동시 시행)에서 윈도우당 개별 조회 대신 단일 왕복으로 줄인다.
+	UsageForPeriods(ctx context.Context, memberID string, periods []string) (map[string]int, error)
 	// UsageByPeriod 는 해당 period 전체 멤버 사용량 맵을 반환한다.
 	UsageByPeriod(ctx context.Context, period string) (map[string]int, error)
 	// ResetUsage 는 멤버의 모든 기간 사용량을 삭제(0으로 초기화)한다.
