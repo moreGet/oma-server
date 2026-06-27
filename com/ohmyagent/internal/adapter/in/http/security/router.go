@@ -2,6 +2,7 @@ package security
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -48,15 +49,19 @@ func (r *SecureRouter) Secured(pattern string, handler http.HandlerFunc, opts ..
 	r.mux.HandleFunc(pattern, func(w http.ResponseWriter, req *http.Request) {
 		raw := extractBearer(req)
 		if raw == "" {
+			slog.Debug("auth rejected", "event", "auth.reject", "reason", "missing bearer token", "method", req.Method, "path", req.URL.Path)
 			writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer token")
 			return
 		}
 		claims, err := r.tokenSvc.Parse(raw)
 		if err != nil {
+			// dev 디버깅용: 만료/서명불일치/형식오류 등 구체 사유를 남긴다(토큰 값은 미기록).
+			slog.Debug("auth rejected", "event", "auth.reject", "reason", "invalid token", "error", err.Error(), "method", req.Method, "path", req.URL.Path)
 			writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid token")
 			return
 		}
 		if claims.Level < opt.minLevel {
+			slog.Debug("auth rejected", "event", "auth.reject", "reason", "insufficient role", "level", int(claims.Level), "need", int(opt.minLevel), "method", req.Method, "path", req.URL.Path)
 			writeAuthError(w, http.StatusForbidden, "FORBIDDEN", "insufficient role")
 			return
 		}

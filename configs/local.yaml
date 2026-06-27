@@ -10,7 +10,19 @@ database:
   dsn: "file:~/aiagent.db?_pragma=busy_timeout(5000)"  # 홈 경로(리눅스 fs). /mnt/c 의 sqlite I/O 이슈 회피. ~ 는 config 로더가 홈으로 확장
   max_open_conns: 1 # sqlite 단일 writer
 auth:
-  jwt_secret: "" # 하드코딩 금지, env(APP_AUTH_JWT_SECRET) 주입
+  jwt_secret: "local-dev-only-jwt-secret-change-me" # 로컬 편의 고정값(토큰 서명 안정 → 재시작해도 로그인 유지). 운영은 env(APP_AUTH_JWT_SECRET) 주입 필수
   jwt_expiry: "24h"
   seed_admin_username: "admin" # 비운영 시딩용
   seed_admin_password: "admin" # 비운영만, env(APP_AUTH_SEED_ADMIN_PASSWORD) 주입
+# 클라이언트 도구 실행 정책 (GET /api/v1/tools/policy). enabled/disabled 생략 = 전체 허용.
+tool_policy:
+  mode: "cached"   # cached(로그인 시 목록 캐시) | realtime(매 호출 /tools/authorize 질의)
+  # enabled: ["read_file","write_file","list_directory","glob","grep"]  # 화이트리스트(지정 시 외 도구 차단)
+  # disabled: ["kill_process"]                                          # 블랙리스트(enabled 보다 우선)
+# 클라이언트 버전 점검 (GET /api/v1/client/version). 배포마다 갱신.
+client_version:
+  latest: "1.0.0"
+  minimum_supported: "1.0.0"
+  download_url: ""   # 사내 배포 위치(비우면 응답에서 생략)
+  notice: ""         # 사용자 안내(비우면 생략)
+  mandatory: false

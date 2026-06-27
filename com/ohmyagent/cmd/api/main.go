@@ -75,7 +75,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	log := logger.Init(logger.Options{Level: "info", Format: "json"})
+	// 비운영(local/dev)은 DEBUG 레벨 + 호출 위치(source)로 상세 로깅, 운영은 INFO.
+	logOpts := logger.Options{Level: "info", Format: "json"}
+	switch cfg.Env {
+	case "local", "dev", "development":
+		logOpts.Level, logOpts.Source = "debug", true
+	}
+	log := logger.Init(logOpts)
 	defer logger.Shutdown() // 종료 시 비동기 로그 버퍼 플러시(가장 마지막에 실행)
 	log.Info("starting server", "env", cfg.Env, "addr", cfg.ServerAddr())
 
@@ -156,6 +162,13 @@ func run() error {
 	statsH := httpin.NewStatsHandler(authUC, providerUC)
 	quotaH := httpin.NewQuotaHandler(quotaService)
 	projectH := httpin.NewProjectHandler(projectService)
+	clientH := httpin.NewClientHandler(
+		httpin.ToolPolicyConfig{Mode: cfg.ToolPolicy.Mode, Enabled: cfg.ToolPolicy.Enabled, Disabled: cfg.ToolPolicy.Disabled},
+		httpin.ClientVersionConfig{
+			Latest: cfg.ClientVersion.Latest, MinimumSupported: cfg.ClientVersion.MinimumSupported,
+			DownloadURL: cfg.ClientVersion.DownloadURL, Notice: cfg.ClientVersion.Notice, Mandatory: cfg.ClientVersion.Mandatory,
+		},
+	)
 	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
 	// 7) 라우트 등록(설계 §7)
@@ -201,6 +214,11 @@ func run() error {
 	// 에이전트 루프의 심장: 대화기록 + 도구스키마 → SSE(텍스트/도구호출/stop_reason).
 	router.Secured("POST /api/v1/agent/chat", httpin.HandleAgent(agentH.Chat), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/agent/suggestions", httpin.HandleAgent(suggestionH.List), security.MinRole(domainauth.RoleLevelUser))
+
+	// 클라이언트 계약: 도구 정책 게이트 + 버전 점검(둘 다 선택 기능, graceful).
+	router.Secured("GET /api/v1/tools/policy", httpin.HandleAgent(clientH.ToolsPolicy), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/tools/authorize", httpin.HandleAgent(clientH.ToolsAuthorize), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/client/version", httpin.HandleAgent(clientH.ClientVersion), security.MinRole(domainauth.RoleLevelUser))
 
 	// 채팅 히스토리 서버 동기화(소유권 스코프).
 	router.Secured("GET /api/v1/agent/sessions", httpin.HandleAgent(sessionH.List), security.MinRole(domainauth.RoleLevelUser))

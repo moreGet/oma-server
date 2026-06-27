@@ -11,12 +11,13 @@ import (
 type Options struct {
 	Level  string // "debug" | "info" | "warn" | "error" (기본 info)
 	Format string // "json" | "text" (기본 json)
+	Source bool   // true 면 호출 위치(file:line)를 함께 기록(개발 상세 로그용)
 }
 
 // New 는 옵션에 따라 *slog.Logger 를 생성한다.
 // 파싱 불가한 값은 안전한 기본값(info / json)으로 폴백한다.
 func New(opts Options) *slog.Logger {
-	handlerOpts := &slog.HandlerOptions{Level: parseLevel(opts.Level)}
+	handlerOpts := &slog.HandlerOptions{Level: parseLevel(opts.Level), AddSource: opts.Source}
 
 	var handler slog.Handler
 	switch strings.ToLower(strings.TrimSpace(opts.Format)) {

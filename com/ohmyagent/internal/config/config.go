@@ -32,12 +32,30 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Config 는 애플리케이션 전역 설정이다.
 type Config struct {
-	Env      string         // APP_ENV 에서 주입(yaml 아님)
-	resetDB  bool           // APP_DB_RESET 에서 주입(yaml 아님). DB 파괴적 초기화 옵트인.
-	Server   ServerConfig   `yaml:"server"`
-	Security SecurityConfig `yaml:"security"`
-	Database DatabaseConfig `yaml:"database"`
-	Auth     AuthConfig     `yaml:"auth"`
+	Env           string              // APP_ENV 에서 주입(yaml 아님)
+	resetDB       bool                // APP_DB_RESET 에서 주입(yaml 아님). DB 파괴적 초기화 옵트인.
+	Server        ServerConfig        `yaml:"server"`
+	Security      SecurityConfig      `yaml:"security"`
+	Database      DatabaseConfig      `yaml:"database"`
+	Auth          AuthConfig          `yaml:"auth"`
+	ToolPolicy    ToolPolicyConfig    `yaml:"tool_policy"`
+	ClientVersion ClientVersionConfig `yaml:"client_version"`
+}
+
+// ToolPolicyConfig 는 클라이언트 도구 실행 정책(GET /api/v1/tools/policy)이다.
+type ToolPolicyConfig struct {
+	Mode     string   `yaml:"mode"`     // cached | realtime (기본 cached)
+	Enabled  []string `yaml:"enabled"`  // nil/생략 = 전체 허용. 지정 시 화이트리스트
+	Disabled []string `yaml:"disabled"` // 블랙리스트(enabled 보다 우선)
+}
+
+// ClientVersionConfig 는 클라이언트 버전 점검(GET /api/v1/client/version)이다.
+type ClientVersionConfig struct {
+	Latest           string `yaml:"latest"`
+	MinimumSupported string `yaml:"minimum_supported"`
+	DownloadURL      string `yaml:"download_url"`
+	Notice           string `yaml:"notice"`
+	Mandatory        bool   `yaml:"mandatory"`
 }
 
 // ServerConfig 는 HTTP 서버 설정이다.
