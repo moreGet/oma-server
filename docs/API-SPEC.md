@@ -3,8 +3,8 @@
 OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽스. 인증은 JWT Bearer.
 
 **에러 envelope (두 종류)**
-- 관리 API(auth/members/llm-providers/chat): 평면 `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2)
-- **C# 에이전트 클라이언트 계약 API**(health/models/agent/*): 중첩 `{ "error": { "code": "bad_request", "message": "..." } }`
+- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
+- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**): `{ "error": { "code": "bad_request", "message": "..." } }`
   소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
 
 ## 인증
@@ -22,7 +22,10 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 | `GET /api/v1/members/{id}` | user (본인 또는 admin↑) |
 | `PUT /api/v1/members/{id}/role` | admin |
 | `PUT /api/v1/members/{id}/active` | admin |
+| `PUT /api/v1/members/{id}/password` | admin (하위 멤버 비번 리셋, CanControl) |
 | `DELETE /api/v1/members/{id}` | super_admin |
+
+멤버 프로필 필드(선택): `POST /api/v1/members` 는 `email`·`display_name`·`organization` 을 함께 받을 수 있고, 멤버 응답에도 포함된다(미설정 시 빈 값). 어드민 웹·`GET /api/v1/users/me` 에서 노출. (역할 CanControl: super_admin→admin·user, admin→user.)
 
 ## LLM Provider 관리
 
@@ -235,27 +238,66 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 |---|---|---|
 | `GET /api/v1/me` | user | 현재 로그인 사용자 |
 | `GET /api/v1/users/me` | user | 클라 프로필 카드 `{username, display_name, organization, email}`(중첩 envelope; members 컬럼 기반, display_name 빈 값이면 username 폴백, org/email 빈 값이면 null) |
+| `GET /api/v1/me/quota` | user | 본인 토큰 쿼터 현황(일/주/월 한도·사용·잔여). 아래 [토큰 쿼터](#토큰-쿼터사용자별-일주월-한도) 참조 |
 | `PUT /api/v1/me/password` | user | 본인 비밀번호 변경 `{old_password,new_password}` |
 | `GET /api/v1/roles` | user | 역할 목록(드롭다운) |
-| `PUT /api/v1/members/{id}/password` | admin | 하위 멤버 비밀번호 리셋 `{new_password}` (CanControl) |
 | `POST /api/v1/llm-providers/{id}/test` | admin | Provider 연결 테스트(1토큰 ping) |
 | `GET /api/v1/statistics` | admin | 대시보드 집계 `{members:{total,by_role}, providers:{total,active}}` |
 
 ### 어드민 웹 페이지 (`/admin`)
 - **스택**: 서버사이드 렌더링 `html/template` + **Bootstrap 5.3(다크 `data-bs-theme`)** + **Bootstrap Icons**(CDN). 사이드바 레이아웃, 생성/관리는 **모달**. Node 빌드 불필요, Go 바이너리에 `go:embed`.
 - **인증**: 로그인 시 JWT 를 **HttpOnly·SameSite=Lax 쿠키**(`admin_session`)에 저장. 페이지는 쿠키로 인증(API 의 Bearer 와 독립).
-- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달 + **토큰 한도**), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장 설정: 활성화·백엔드 DB/파일/S3·연결테스트), `/admin/account`(계정 정보). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`).
+- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`).
 
 ### 토큰 쿼터(사용자별 일·주·월 한도)
 - **모델**: **일(YYYY-MM-DD)·주(YYYY-Www, ISO)·월(YYYY-MM)** 3개 기간 한도를 동시 시행(UTC, 자동 리셋). 한도 = 윈도우별 **멤버 값(>0) 우선, 없으면 전역 기본값**, 0이면 그 윈도우 무제한. 카운트=`total_tokens`.
 - **시행(소프트)**: chat/agent 스트리밍 **시작 전** 일·주·월 중 하나라도 사용량 ≥ 한도면 **429**(`TOO_MANY_REQUESTS` / agent 계약 `rate_limited`). 응답 **종료 후** 세 기간 카운터에 실제 토큰 누적.
 - **사용량 출처 + 폴백**: provider 응답 `usage.total_tokens`(SSE 종료 시 캡처). usage 미제공(0)이면 **토크나이저 추정 폴백** `quota.EstimateTokens`(BPE 의존성 없는 문자 클래스 휴리스틱: CJK ~1토큰/자, 그 외 ~4자/토큰)로 prompt+response 추정 → 카운트 누락 방지.
-- **잔여량 조회 API**: `GET /api/v1/me/quota`(user↑) → 본인 일/주/월 `{window, period, limit, used, remaining, unlimited, percent_used, percent_remaining}` 배열. (flat envelope)
-- **LB-safe**: 사용량/한도 전부 DB(`token_usage`(member,period)·`member_token_limits`·`quota_config`, 세 기간 키 포맷이 달라 한 테이블 공존). 누적은 driver별 atomic upsert(mysql `ON DUPLICATE KEY`/sqlite `ON CONFLICT`) → 다중 인스턴스 정확.
-- **어드민**: `/admin/members` 에서 전역 기본(일/주/월) + 멤버별(일/주/월) 한도 설정, 이번 일·주·월 사용량 표시.
+- **LB-safe 카운터**: 사용량/한도 전부 DB(`token_usage`(member,period)·`member_token_limits`·`quota_config`, 세 기간 키 포맷이 달라 한 테이블 공존). 누적은 driver별 atomic upsert(mysql `ON DUPLICATE KEY`/sqlite `ON CONFLICT`) → 다중 인스턴스 정확.
+
+#### `GET /api/v1/me/quota`  (user) — 본인 잔여량 조회
+본인의 일·주·월 한도/사용/잔여를 반환한다(flat envelope). `windows`는 항상 **일→주→월** 순.
+
+응답 200:
+```json
+{
+  "windows": [
+    { "window": "day",   "period": "2026-06-27", "limit": 1000, "used": 250,
+      "remaining": 750, "unlimited": false, "percent_used": 25.0, "percent_remaining": 75.0 },
+    { "window": "week",  "period": "2026-W26",   "limit": 5000, "used": 1200,
+      "remaining": 3800, "unlimited": false, "percent_used": 24.0, "percent_remaining": 76.0 },
+    { "window": "month", "period": "2026-06",    "limit": 0,    "used": 8400,
+      "remaining": 0,    "unlimited": true,  "percent_used": 0.0, "percent_remaining": 100.0 }
+  ]
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `window` | string | `day` \| `week` \| `month` |
+| `period` | string | 현재 기간 키(일=`YYYY-MM-DD`, 주=`YYYY-Www` ISO, 월=`YYYY-MM`, UTC) |
+| `limit` | int | 적용 한도(토큰). **0 = 무제한** |
+| `used` | int | 이번 기간 누적 사용 토큰 |
+| `remaining` | int | `max(0, limit-used)`. 무제한이면 0(`unlimited`로 구분) |
+| `unlimited` | bool | `limit=0` |
+| `percent_used` / `percent_remaining` | float | 사용률/잔여율 0~100(소수 1자리). 무제한이면 0 / 100 |
+
+> `remaining`이 0인 윈도우가 하나라도 있으면 다음 chat/agent 요청이 429로 거부된다(소프트 시행). 에러: `401`(토큰 무효).
+
+- **어드민 설정**: `/admin/members` 에서 전역 기본(일/주/월) + 멤버별(일/주/월) 한도 설정, 이번 일·주·월 사용량 표시 + 멤버별 사용량 초기화.
 
 ### 프로젝트/대화 동기화 (클라이언트 server-api-spec)
-- **엔드포인트**(user↑, 중첩 envelope): `GET/POST /api/v1/projects`, `GET/DELETE /api/v1/projects/{id}`, `POST /api/v1/projects/{id}/conversations`, `DELETE /api/v1/projects/{id}/conversations/{cid}`. 시각은 ISO-8601 UTC.
+모두 **user↑, 중첩 envelope**, 소유권(owner) 스코프, 시각은 ISO-8601 UTC.
+
+| 메서드·경로 | 기능 |
+|---|---|
+| `GET /api/v1/projects` | 본인 프로젝트 목록 `{projects:[{id,name,created_utc,updated_utc,conversation_count}]}` |
+| `POST /api/v1/projects` | 프로젝트 생성/업서트 `{client_id,name}` → `{id,name,created_utc,updated_utc,...}`(201) |
+| `GET /api/v1/projects/{id}` | 단건 + 대화 요약 `{id,name,conversations:[{id,client_id,title,updated_utc,message_count}]}` |
+| `DELETE /api/v1/projects/{id}` | 프로젝트 삭제(소속 대화 메타 정리) |
+| `POST /api/v1/projects/{id}/conversations` | 대화 업서트(push) `{client_id,title,created_utc,updated_utc,messages[]}` → `{id,client_id,updated_utc}` |
+| `DELETE /api/v1/projects/{id}/conversations/{cid}` | 대화 삭제 |
+
 - **업서트**: `client_id`(클라 GUID) ↔ 서버 id 매핑, 재전송 시 같은 id 반환. 메타데이터는 DB(`projects`·`conversations`), 소유권(owner) 스코프.
 - **대화 본문 저장**: messages 를 **gzip** 후 선택형 백엔드(**DB BLOB / 로컬 디렉터리 / S3**)에 `<owner>/<project>/<conversation>.json.gz` 구조로 저장. 어드민 `/admin/sessions` 에서 백엔드 선택(로그 저장과 동일 방식, 설정은 분리). S3 시크릿 AES-GCM.
 - **계정별 세션 캡(하드)**: 신규 대화 세션 수가 한도 도달 시 **429**(`rate_limited`) 거부(기존 세션 업서트는 허용). 한도 = 멤버별 오버라이드(>0) 우선, 없으면 전역 기본(`session_settings.default_max_sessions`), 0=무제한. 어드민 `/admin/sessions`(전역) + 멤버 모달(개별).

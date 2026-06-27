@@ -59,7 +59,8 @@ func newProvider(driver string, conn *sql.DB) (*goose.Provider, error) {
 		return nil, fmt.Errorf("db: sub migrations fs: %w", err)
 	}
 
-	provider, err := goose.NewProvider(dialect, conn, sub)
+	// SQL 마이그레이션(1..9) + 조건부 Go 마이그레이션(10/11, idempotent column add).
+	provider, err := goose.NewProvider(dialect, conn, sub, goose.WithGoMigrations(goMigrations(driver)...))
 	if err != nil {
 		return nil, fmt.Errorf("db: new goose provider: %w", err)
 	}
