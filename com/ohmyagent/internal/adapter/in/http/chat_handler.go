@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -59,8 +58,8 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
 
 	var req chatReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+		return err
 	}
 
 	// 쿼터 사전 검사: 이번 달 한도 초과면 스트리밍 시작 전 429.
@@ -168,16 +167,6 @@ func (h *ChatHandler) recordChat(memberID string, req chatReq, response, finishR
 		TotalTokens:      tt,
 		FinishReason:     finishReason,
 	})
-}
-
-// writeSSE 는 payload 를 `data: {json}\n\n` 형식으로 기록한다.
-func writeSSE(w http.ResponseWriter, payload any) error {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
-	return err
 }
 
 // ---------------------------------------------------------------------------

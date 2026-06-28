@@ -3,12 +3,14 @@
 package httpin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"sync"
 )
 
 // 에러 코드 상수(스펙 §5.2). AppError.Code 와 HTTPStatus() 매핑이 공유한다.
@@ -29,6 +31,24 @@ const (
 	defaultPageLimit = 20
 	maxPageLimit     = 100
 )
+
+// 요청 본문 크기 상한(메모리 보호 장치). 과대 본문은 디코딩 전 차단해 힙 폭증/GC 압력/OOM 을 막는다.
+const (
+	// maxJSONBytes: 일반 JSON 본문(인증/CRUD/설정 등).
+	maxJSONBytes = 1 << 20 // 1 MiB
+	// maxLargeJSONBytes: 첨부 base64 인라인·대화 본문 등 대용량 본문(agent/chat·세션·대화 push).
+	maxLargeJSONBytes = 32 << 20 // 32 MiB
+)
+
+// decodeJSON 은 요청 본문을 maxBytes 로 제한해 JSON 디코딩한다.
+// 상한 초과/형식 오류는 400(BAD_REQUEST)으로 매핑한다(MaxBytesReader 가 과대 본문을 조기 차단).
+func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		return ErrBadRequest("invalid request body")
+	}
+	return nil
+}
 
 // HandlerFunc 는 error 를 반환하는 핸들러 시그니처다.
 type HandlerFunc func(w http.ResponseWriter, r *http.Request) error
@@ -175,6 +195,38 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// sseBufPool 은 SSE 프레임 직렬화용 버퍼를 재사용한다(토큰당 할당 제거 — 고동접 스트리밍 GC 압력 완화).
+var sseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+// writeSSE 는 payload 를 `data: {json}\n\n` 형식으로 1회 Write 한다(스펙: POST /chat).
+// fmt.Fprintf(리플렉션 포맷팅 + 포맷 문자열 할당) 대신 풀링한 버퍼에 직접 프레이밍한다.
+func writeSSE(w http.ResponseWriter, payload any) error {
+	buf := sseBufPool.Get().(*bytes.Buffer)
+	defer func() { buf.Reset(); sseBufPool.Put(buf) }()
+	buf.WriteString("data: ")
+	if err := json.NewEncoder(buf).Encode(payload); err != nil { // Encode 가 끝에 \n 1개 추가
+		return err
+	}
+	buf.WriteByte('\n') // 빈 줄로 이벤트 종료 → 총 `data: {json}\n\n`
+	_, err := w.Write(buf.Bytes())
+	return err
+}
+
+// writeSSEEvent 는 `event: <name>\ndata: {json}\n\n` 형식으로 1회 Write 한다(스펙: POST /agent/chat).
+func writeSSEEvent(w http.ResponseWriter, event string, payload any) error {
+	buf := sseBufPool.Get().(*bytes.Buffer)
+	defer func() { buf.Reset(); sseBufPool.Put(buf) }()
+	buf.WriteString("event: ")
+	buf.WriteString(event)
+	buf.WriteString("\ndata: ")
+	if err := json.NewEncoder(buf).Encode(payload); err != nil { // Encode 가 끝에 \n 1개 추가
+		return err
+	}
+	buf.WriteByte('\n')
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 // atoiDefault 는 문자열을 정수로 파싱하고, 실패 시 def 를 반환한다.

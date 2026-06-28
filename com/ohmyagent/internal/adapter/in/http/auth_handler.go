@@ -1,7 +1,6 @@
 package httpin
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -23,8 +22,8 @@ func NewAuthHandler(svc domainauth.Service) *AuthHandler { return &AuthHandler{s
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	var req loginReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	token, member, err := h.svc.Login(r.Context(), domainauth.LoginCommand{
 		Username: req.Username,
@@ -80,8 +79,8 @@ func (h *AuthHandler) CreateMember(w http.ResponseWriter, r *http.Request) error
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req createMemberReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	member, err := h.svc.CreateMember(r.Context(), domainauth.CreateMemberCommand{
 		Username: req.Username,
@@ -102,8 +101,8 @@ func (h *AuthHandler) ChangeRole(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req changeRoleReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	member, err := h.svc.ChangeRole(r.Context(), domainauth.ChangeRoleCommand{
 		ActorID:  claims.MemberID,
@@ -123,8 +122,8 @@ func (h *AuthHandler) SetActive(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req setActiveReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	member, err := h.svc.SetActive(r.Context(), domainauth.SetActiveCommand{
 		ActorID:  claims.MemberID,
@@ -201,8 +200,8 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) err
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req changePasswordReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	if err := h.svc.ChangePassword(r.Context(), claims.MemberID, req.OldPassword, req.NewPassword); err != nil {
 		return authErrToHTTP(err)
@@ -217,8 +216,8 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) erro
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req resetPasswordReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	if err := h.svc.ResetPassword(r.Context(), claims.MemberID, r.PathValue("id"), req.NewPassword); err != nil {
 		return authErrToHTTP(err)

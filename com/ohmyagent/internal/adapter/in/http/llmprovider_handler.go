@@ -1,7 +1,6 @@
 package httpin
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -55,8 +54,8 @@ func (h *ProviderHandler) Create(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req createProviderReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	p, err := h.svc.Create(r.Context(), domainllmprovider.CreateCommand{
 		Name:         req.Name,
@@ -78,8 +77,8 @@ func (h *ProviderHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) e
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req updateConfigReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	p, err := h.svc.UpdateConfig(r.Context(), domainllmprovider.UpdateConfigCommand{
 		ID:      r.PathValue("id"),

@@ -3,7 +3,6 @@ package httpin
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -45,8 +44,8 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
 
 	var req agentChatReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+		return err
 	}
 	cmd := req.toCommand(claims.MemberID)
 
@@ -195,16 +194,6 @@ func writeAgentEvent(w http.ResponseWriter, ev domainagent.Event) error {
 	default:
 		return nil
 	}
-}
-
-// writeSSEEvent 는 `event: <name>\ndata: {json}\n\n` 형식으로 기록한다.
-func writeSSEEvent(w http.ResponseWriter, event string, payload any) error {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-	return err
 }
 
 // ---------------------------------------------------------------------------

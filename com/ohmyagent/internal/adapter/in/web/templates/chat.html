@@ -1,0 +1,61 @@
+{{define "content"}}
+{{if .CanManage}}
+<div class="row g-3 mb-3">
+  <div class="col-12 col-sm-6 col-xl-3">
+    <div class="card h-100"><div class="card-body d-flex align-items-center gap-3">
+      <span class="stat-ic"><i class="bi bi-chat-dots"></i></span>
+      <div><div class="text-secondary small fw-semibold">방</div>
+        <div class="fs-3 fw-bold">{{comma .Data.Stats.Rooms}}</div>
+        <small class="text-secondary">그룹 {{comma .Data.Stats.GroupRooms}} · 1:1 {{comma .Data.Stats.DirectRooms}}</small></div>
+    </div></div>
+  </div>
+  <div class="col-12 col-sm-6 col-xl-3">
+    <div class="card h-100"><div class="card-body d-flex align-items-center gap-3">
+      <span class="stat-ic"><i class="bi bi-envelope"></i></span>
+      <div><div class="text-secondary small fw-semibold">메시지</div>
+        <div class="fs-3 fw-bold">{{comma .Data.Stats.Messages}}</div>
+        <small class="text-secondary">삭제 {{comma .Data.Stats.DeletedMessages}}</small></div>
+    </div></div>
+  </div>
+  <div class="col-12 col-sm-6 col-xl-3">
+    <div class="card h-100"><div class="card-body d-flex align-items-center gap-3">
+      <span class="stat-ic"><i class="bi bi-paperclip"></i></span>
+      <div><div class="text-secondary small fw-semibold">첨부</div>
+        <div class="fs-3 fw-bold">{{comma .Data.Stats.Attachments}}</div>
+        <small class="text-secondary">{{.Data.Stats.AttachmentSize}}</small></div>
+    </div></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-chat-square-text me-1"></i> 채팅 방 (최근 활동순)</div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead><tr><th>방</th><th>유형</th><th>멤버</th><th>메시지</th><th>마지막 활동 <small class="text-secondary fw-normal">(KST)</small></th><th class="text-end">작업</th></tr></thead>
+      <tbody>
+        {{range .Data.Rooms}}
+        <tr>
+          <td class="fw-semibold">{{.Name}}</td>
+          <td>{{if eq .Type "direct"}}<span class="badge rounded-pill badge-user">1:1</span>{{else}}<span class="badge rounded-pill badge-admin">그룹</span>{{end}}</td>
+          <td>{{comma .MemberCount}}</td>
+          <td>{{comma .MessageCount}}</td>
+          <td><small class="text-secondary">{{.LastActivity}}</small></td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-light" href="/admin/chat/rooms/{{.ID}}"><i class="bi bi-eye"></i> 보기</a>
+            <form method="post" action="/admin/chat/rooms/{{.ID}}/delete" class="d-inline" onsubmit="return confirm('이 방과 모든 메시지를 삭제할까요?');">
+              <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6" class="text-secondary text-center py-4">채팅 방이 없습니다.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-secondary small mt-3 mb-0">방을 클릭해 메시지를 검토하고, 부적절한 메시지를 삭제(소프트)할 수 있습니다. 삭제 시 방 멤버에게 실시간 반영됩니다.</p>
+{{else}}
+<div class="alert alert-info">관리자만 접근할 수 있습니다.</div>
+{{end}}
+{{end}}

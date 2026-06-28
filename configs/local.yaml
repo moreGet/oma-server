@@ -14,23 +14,13 @@ auth:
   jwt_expiry: "24h"
   seed_admin_username: "admin" # 비운영 시딩용
   seed_admin_password: "admin" # 비운영만, env(APP_AUTH_SEED_ADMIN_PASSWORD) 주입
-# 클라이언트 도구 실행 정책 (GET /api/v1/tools/policy). enabled/disabled 생략 = 전체 허용.
-tool_policy:
-  mode: "cached"   # cached(로그인 시 목록 캐시) | realtime(매 호출 /tools/authorize 질의)
-  # enabled: ["read_file","write_file","list_directory","glob","grep"]  # 화이트리스트(지정 시 외 도구 차단)
-  # disabled: ["kill_process"]                                          # 블랙리스트(enabled 보다 우선)
-# 클라이언트 버전 점검 (GET /api/v1/client/version). 배포마다 갱신.
-client_version:
-  latest: "1.0.0"
-  minimum_supported: "1.0.0"
-  download_url: ""   # 사내 배포 위치(비우면 응답에서 생략)
-  notice: ""         # 사용자 안내(비우면 생략)
-  mandatory: false
-# 서버 제어형 위험명령/경로 차단 (GET /api/v1/security/command-policy).
-# "2중 안전": 클라 내장 디폴트에 아래 패턴을 추가만 한다(끄지는 못함). 비우면 클라 디폴트만 적용.
-command_policy:
-  # blocked_patterns:
-  #   - { type: regex,     pattern: "\\bnet\\s+user\\b", reason: "사용자 계정 조작 금지", script_type: any }
-  #   - { type: substring, pattern: "bcdedit",            reason: "부트 설정 변조 금지",   script_type: powershell }
-  # blocked_paths:
-  #   - { type: substring, pattern: "D:\\sensitive", reason: "민감 디렉토리 접근 금지" }
+# 참고: 도구 정책(tools/policy)·위험명령 차단(security/command-policy)·클라 버전(client/version)은
+#       DB 에서 관리하며 어드민(/admin/tools, /admin/client)에서 편집한다(yaml 설정 아님).
+# 채팅 실시간 전파 방식. memory=단일 인스턴스(기본), redis=다중 인스턴스 pub/sub.
+messaging:
+  broadcaster: "memory"   # memory | redis
+  redis:
+    addr: "localhost:6379"   # broadcaster=redis 일 때 접속 주소
+    password: ""             # 운영은 env(APP_MESSAGING_REDIS_PASSWORD) override
+    db: 0
+    channel: "ohmyagent:chat"

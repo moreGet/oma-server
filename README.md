@@ -1,6 +1,6 @@
 # OhMyAgent · AI Agent Server
 
-Go로 작성한 AI 에이전트 백엔드. 멤버/권한 관리, LLM Provider 관리, 채팅·에이전트 SSE 스트리밍 API, 서버사이드 렌더링 어드민 콘솔(`/admin`)을 제공한다.
+Go로 작성한 AI 에이전트 백엔드. 멤버/권한 관리, LLM Provider 관리, 채팅·에이전트 SSE 스트리밍 API, **사용자 간 실시간 채팅(WebSocket, 단체/1:1)**, 서버사이드 렌더링 어드민 콘솔(`/admin`)을 제공한다.
 
 - **언어/런타임**: Go (표준 `net/http` + `log/slog`)
 - **DB / 마이그레이션**: SQLite(modernc, 순수 Go) 또는 MySQL · [goose](https://github.com/pressly/goose) 임베드 마이그레이션
@@ -26,6 +26,7 @@ com/ohmyagent/
       in/web/               # 어드민 콘솔(html/template + Bootstrap, 쿠키 인증)
       out/db/               # 레포지토리(손작성 SQL) + goose 마이그레이션
       out/llm/              # LLM 어댑터(OpenAI/Claude/Gemini/Ollama) + 팩토리/캐시
+      out/messagingbus/     # 실시간 채팅 브로드캐스터(memory | redis pub/sub)
     config/                 # configs/{APP_ENV}.yaml 로드·검증
 configs/                    # local/dev/docker/prod.yaml
 docs/API-SPEC.md            # HTTP API 명세
@@ -73,7 +74,7 @@ APP_ENV=local go run ./com/ohmyagent/cmd/api
 
 ### 5) 어드민 콘솔
 브라우저에서 **`http://localhost:8080/admin/login`** → `admin` / `admin`(로컬 기본) 로 로그인.
-대시보드·멤버 관리·Provider 관리·내 계정 페이지 제공.
+대시보드·멤버 관리·Provider 관리·대화 이력·세션 저장·**도구 정책(`/admin/tools`)**·**클라이언트 버전(`/admin/client`)**·**채팅 관리/모더레이션(`/admin/chat`)**·내 계정 페이지 제공(사이드바는 섹션별 접이식 메뉴).
 
 > ⚠️ `/admin`(끝 슬래시 없음)은 매칭되지 않을 수 있으니 `/admin/login` 또는 `/admin/`으로 접속.
 
@@ -98,6 +99,7 @@ APP_ENV=local go run ./com/ohmyagent/cmd/api
 | `APP_AUTH_SEED_ADMIN_PASSWORD` | 시드 admin 비밀번호 |
 | `APP_DB_RESET` | `1`/`true`/`yes`/`on`이면 기동 시 **DB 전체 drop & 재생성**(데이터 삭제). 기본 off. **운영(prod)에서는 무시** |
 | `APP_ENCRYPTION_SECRET` | Provider API 키를 DB에 **직접 저장**할 때 AES-GCM 암호화 키 소스. yaml `security.encryption_secret`(모든 환경 기본값 제공)보다 **우선**. **운영은 반드시 고유 값으로 override**(예: `openssl rand -base64 32`) |
+| `APP_MESSAGING_REDIS_PASSWORD` | 채팅 redis 브로드캐스터 비밀번호(`messaging.broadcaster: redis` 일 때, yaml보다 우선) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | 각 LLM Provider API 키(Provider의 `api_key_env`에 변수명만 등록) |
 | `OLLAMA_HOST` | Ollama 엔드포인트(미설정 시 `http://localhost:11434`) |
 
@@ -134,14 +136,17 @@ API 키는 **둘 중 하나**로 등록:
 수천~수만 동접을 견디도록 N/W IO·풀을 튜닝했다.
 
 - **HTTP 서버**: keep-alive `IdleTimeout`(120s)·`ReadHeaderTimeout`(10s, slowloris 완화). SSE 핸들러는 write deadline 을 해제해 장시간 스트리밍 유지.
-- **DB 풀**: `MaxIdleConns = MaxOpenConns`(기본 2 → 부하 시 커넥션 churn 제거), `ConnMaxLifetime`(30m)·`ConnMaxIdleTime`(5m)로 스테일 커넥션 정리. mysql 풀 크기는 `max_open_conns`(prod 기본 20)로 조정.
+- **요청 본문 상한**(메모리 보호): 모든 JSON 엔드포인트가 `http.MaxBytesReader` 로 본문 크기를 제한해 디코딩 전 과대 본문을 차단한다(힙 폭증·GC 압력·OOM 방지). 상한은 일반 1 MiB, 첨부 base64 인라인·대화/세션 본문(chat/agent·세션 upsert·대화 push)은 32 MiB. 초과 시 `400`. 첨부 업로드(`multipart`)는 별도로 10 MiB.
+- **SSE 쓰기 핫패스**: chat/agent 스트리밍의 이벤트 프레이밍(`data:`/`event:`)을 `fmt.Fprintf`(리플렉션 포맷 + 포맷 문자열 할당) 대신 **`sync.Pool` 버퍼**에 직접 조립해 1회 `Write` 한다 — 토큰당 할당을 제거(고동접 스트리밍 GC 압력 완화). 토큰별 flush 는 유지(저지연).
+- **DB 풀**: `MaxIdleConns` 를 `MaxOpenConns` 와 동일하게(`database/sql` 기본값 2 대신) 설정해 부하 시 커넥션 open/close churn 을 제거하고, `ConnMaxLifetime`(30m)·`ConnMaxIdleTime`(5m)로 스테일 커넥션을 정리한다. sqlite 는 단일 writer 라 1, mysql 풀 크기는 `max_open_conns`(설정 미지정 시 10)로 조정.
+- **채팅 멘션 피드 인덱스**: `GET /chat/mentions` 는 방 필터 없이 `created_at DESC` 정렬+LIMIT 하므로 `chat_messages(created_at)` 인덱스로 전체 스캔+filesort 를 제거(인덱스 순서 스캔 + 조기 LIMIT 종료).
 - **토큰 쿼터 핫패스**(대규모 동접 채팅): chat/agent 요청마다 일·주·월 사용량을 윈도우별 개별 조회 대신 **IN 절 단일 쿼리**(`UsageForPeriods`)로 묶고(시행 `Check`·조회 `/me/quota`), 응답 후 누적도 **멀티로우 upsert 단일 쿼리**(`AddUsage`)로 묶어 채팅당 쿼터 DB 왕복을 절반 이하로 줄인다. 무제한(한도 0) 윈도우는 조회 자체를 생략. 토큰 추정 폴백 텍스트(대화 전체 연결)는 **usage 미제공 시에만 지연 생성**(정상 경로 할당 회피).
 - **LLM 업스트림**: 모든 외부 어댑터가 **공유 HTTP 클라이언트**(Transport `MaxIdleConns=256`·`MaxIdleConnsPerHost=64`, HTTP/2)로 OpenAI/Claude/Gemini 커넥션을 재사용(기본 2 병목 제거). 전역 타임아웃 없이 ctx 로 취소(SSE 장기 스트리밍 보존).
 - **활성 Provider 캐시**: 질의마다 DB 조회 없이 `atomic.Value` 캐시에서 활성 Provider 해석.
 - **할당 절감(GC)**: 대화 이력·세션 본문 gzip 저장 경로가 `gzip.Writer` 를 **`sync.Pool`** 로 재사용해 요청당 압축기 재할당을 제거(고동접 GC 압력 완화). 응답 본문 이력 저장은 비차단 비동기 큐.
 - **로깅**: 헬스 체크 제외(LB 폴링 노이즈), `request_id`(`X-Request-Id`) 상관관계, 상태/지연 기반 레벨, 응답 바이트·클라이언트 IP 포함. slog 이벤트는 버퍼+워커 **비동기 핸들러**로 비차단 기록.
 
-> 수평 확장: 상태는 DB 에만 있고 핸들러는 stateless(JWT)라 인스턴스를 늘려 LB 뒤에 두면 된다. sqlite 는 단일 노드용이므로 다중 인스턴스는 **mysql** 사용.
+> 수평 확장: 상태는 DB 에만 있고 핸들러는 stateless(JWT)라 인스턴스를 늘려 LB 뒤에 두면 된다. sqlite 는 단일 노드용이므로 다중 인스턴스는 **mysql** 사용. **사용자 간 실시간 채팅**은 인메모리 허브라 다중 인스턴스에선 `messaging.broadcaster: redis`(Redis pub/sub)로 전환해 인스턴스 간 이벤트를 전파한다(기본 `memory`=단일 인스턴스).
 
 ---
 

@@ -1,9 +1,12 @@
 package security
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -39,6 +42,15 @@ func (rec *statusRecorder) Write(b []byte) (int, error) {
 // Unwrap 은 내부 ResponseWriter 를 노출한다. http.ResponseController 가 이를 통해
 // Flush()·SetWriteDeadline() 등 옵셔널 기능에 도달한다(SSE 스트리밍 필수).
 func (rec *statusRecorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
+
+// Hijack 은 내부 ResponseWriter 의 Hijacker 로 위임한다(WebSocket 업그레이드 필수).
+// statusRecorder 가 래핑해도 WS 핸드셰이크가 커넥션을 탈취할 수 있게 한다.
+func (rec *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := rec.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
+}
 
 // loggingMiddleware 는 요청을 구조화 로깅한다.
 //   - 헬스 체크는 로그에서 제외(고빈도 폴링 노이즈 절감).

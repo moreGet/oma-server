@@ -1,0 +1,45 @@
+{{define "content"}}
+{{if .CanManage}}
+<a href="/admin/chat" class="btn btn-sm btn-outline-light mb-3"><i class="bi bi-arrow-left"></i> 채팅 목록</a>
+
+<div class="card mb-3"><div class="card-body">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h5 class="mb-1">{{.Data.Name}}
+        {{if eq .Data.Type "direct"}}<span class="badge rounded-pill badge-user">1:1</span>{{else}}<span class="badge rounded-pill badge-admin">그룹</span>{{end}}
+      </h5>
+      <small class="text-secondary">멤버 {{comma (len .Data.Members)}}명: {{range $i, $m := .Data.Members}}{{if $i}}, {{end}}<span class="mono">{{$m}}</span>{{end}}</small>
+    </div>
+    <form method="post" action="/admin/chat/rooms/{{.Data.ID}}/delete" onsubmit="return confirm('이 방과 모든 메시지를 삭제할까요?');">
+      <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i> 방 삭제</button>
+    </form>
+  </div>
+</div></div>
+
+<div class="card">
+  <div class="card-header bg-transparent fw-semibold"><i class="bi bi-chat-text me-1"></i> 메시지 <small class="text-secondary fw-normal">(최신 100건)</small></div>
+  <div class="card-body vstack gap-2">
+    {{range .Data.Messages}}
+    <div class="d-flex justify-content-between align-items-start border-bottom pb-2">
+      <div class="flex-grow-1 me-2">
+        <div class="small"><span class="fw-semibold mono">{{.SenderID}}</span> <span class="text-secondary">· {{.CreatedAt}} KST</span>
+          {{if .Attachments}} <span class="badge bg-secondary"><i class="bi bi-paperclip"></i> {{.Attachments}}</span>{{end}}
+        </div>
+        {{if .Deleted}}<div class="text-secondary fst-italic">삭제된 메시지</div>{{else}}<div style="white-space:pre-wrap;word-break:break-word">{{.Content}}</div>{{end}}
+      </div>
+      {{if not .Deleted}}
+      <form method="post" action="/admin/chat/messages/{{.ID}}/delete" onsubmit="return confirm('이 메시지를 삭제할까요?');">
+        <input type="hidden" name="room_id" value="{{$.Data.ID}}">
+        <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+      </form>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="text-secondary text-center py-4">메시지가 없습니다.</div>
+    {{end}}
+  </div>
+</div>
+{{else}}
+<div class="alert alert-info">관리자만 접근할 수 있습니다.</div>
+{{end}}
+{{end}}

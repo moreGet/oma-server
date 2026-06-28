@@ -54,8 +54,8 @@ func (h *SessionHandler) Upsert(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	claims, _ := security.ClaimsFrom(r.Context())
 	var req upsertSessionReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+		return err
 	}
 	s, err := h.svc.Upsert(r.Context(), domainchatsession.UpsertCommand{
 		ID:      r.PathValue("id"),

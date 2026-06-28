@@ -4,7 +4,7 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 
 **에러 envelope (두 종류)**
 - **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
-- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**): `{ "error": { "code": "bad_request", "message": "..." } }`
+- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**, **`/chat/rooms*`**·**`/chat/ws`**): `{ "error": { "code": "bad_request", "message": "..." } }`
   소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
 
 ---
@@ -15,7 +15,7 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 
 | HTTP | 평면 code | 중첩 code | 의미 | 대표 발생 상황 |
 |---|---|---|---|---|
-| **400** | `BAD_REQUEST` | `bad_request` | 잘못된 요청 | JSON 파싱 실패, 필수 필드 누락, 형식 오류(`messages` 빈 배열, `api_key_env` 형식 위반, 첨부 MIME 불허/>10MiB, `client_id`/`title` 누락 등) |
+| **400** | `BAD_REQUEST` | `bad_request` | 잘못된 요청 | JSON 파싱 실패, 필수 필드 누락, 형식 오류(`messages` 빈 배열, `api_key_env` 형식 위반, 첨부 MIME 불허/>10MiB, `client_id`/`title` 누락 등), **요청 본문 과대**(JSON 본문 상한 초과 — 일반 1 MiB, chat/agent·세션·대화 push 32 MiB) |
 | **401** | `UNAUTHORIZED` | `unauthorized` | 인증 실패 | Authorization 헤더 없음 / Bearer 토큰 만료·서명불일치·형식오류 |
 | **403** | `FORBIDDEN` | `forbidden` | 인가 실패 | 역할 부족(`MinRole` 미달), 타인 소유 리소스 접근(세션/멤버 `CanControl` 위반) |
 | **404** | `NOT_FOUND` | `not_found` | 리소스 없음 | 멤버/Provider/프로젝트/대화 없음, **활성 LLM Provider 없음**(`no active llm provider`), 미구현 선택 엔드포인트 |
@@ -267,8 +267,9 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 
 > 서버는 세션 `data` 를 불투명 JSON 으로 보관(소유자·시각만 관리). 클라이언트가 로컬 영속 대신/병행 사용 가능.
 
-### 도구 정책 / 클라이언트 버전 / 명령 보안 (user, 선택 기능 · 설정 기반)
-서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략, 명령 보안=클라 디폴트만). 값은 `config`(`tool_policy`·`client_version`·`command_policy`, yaml/env)에서 주입.
+### 도구 정책 / 클라이언트 버전 / 명령 보안 (user, 선택 기능)
+서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략, 명령 보안=클라 디폴트만).
+- **도구 정책**(`tools/policy`)·**명령 보안**(`security/command-policy`)은 **DB(`tool_policy_settings`)**, **클라이언트 버전**(`client/version`)은 **DB(`client_version_settings`)** 에 저장되고 어드민(`/admin/tools`, `/admin/client`)에서 편집한다(즉시 반영, atomic 캐시). yaml 설정 아님.
 
 | 메서드·경로 | 기능 |
 |---|---|
@@ -302,7 +303,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 | `reason` | string | 차단 사유(표시/로그). 빈 값이면 생략 |
 | `script_type` | `any` \| `powershell` \| `cmd` | 적용 셸(`blocked_patterns`만). 미지정/이상값 → `any` |
 
-- **설정**: `config.command_policy.blocked_patterns` / `blocked_paths`(yaml). 비우면 `{"blocked_patterns":[],"blocked_paths":[]}`.
+- **설정**: 어드민 `/admin/tools`(DB `tool_policy_settings`). 비우면 `{"blocked_patterns":[],"blocked_paths":[]}`.
 - 서버는 도구 끄는 필드를 두지 않는다(디폴트 약화 불가) — 2중 안전.
 
 ---
@@ -336,7 +337,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 ### 어드민 웹 페이지 (`/admin`)
 - **스택**: 서버사이드 렌더링 `html/template` + **Bootstrap 5.3(다크 `data-bs-theme`)** + **Bootstrap Icons**(CDN). 사이드바 레이아웃, 생성/관리는 **모달**. Node 빌드 불필요, Go 바이너리에 `go:embed`.
 - **인증**: 로그인 시 JWT 를 **HttpOnly·SameSite=Lax 쿠키**(`admin_session`)에 저장. 페이지는 쿠키로 인증(API 의 Bearer 와 독립).
-- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`).
+- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/tools`(**도구 정책**: 모드(cached/realtime)·허용/차단 도구 목록·위험명령/경로 차단 패턴(JSON), DB 저장·즉시 반영), `/admin/client`(**클라이언트 버전**: latest·minimum_supported·download_url·notice·mandatory, DB 저장·즉시 반영 → `GET /api/v1/client/version` 에 반영), `/admin/chat`(**채팅 관리/모더레이션**: 방·메시지·첨부 집계 + 방 목록 + 방 상세(멤버·메시지 검토) + 메시지 소프트삭제·방 삭제, 삭제 시 멤버에게 실시간 반영), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`). 사이드바는 섹션별 접이식(슬라이드) 메뉴(개요/사용자/AI/저장소/채팅/보안·도구/클라이언트).
 
 ### 토큰 쿼터(사용자별 일·주·월 한도)
 - **모델**: **일(YYYY-MM-DD)·주(YYYY-Www, ISO)·월(YYYY-MM)** 3개 기간 한도를 동시 시행(UTC, 자동 리셋). 한도 = 윈도우별 **멤버 값(>0) 우선, 없으면 전역 기본값**, 0이면 그 윈도우 무제한. 카운트=`total_tokens`.
@@ -390,6 +391,49 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 - **업서트**: `client_id`(클라 GUID) ↔ 서버 id 매핑, 재전송 시 같은 id 반환. 메타데이터는 DB(`projects`·`conversations`), 소유권(owner) 스코프.
 - **대화 본문 저장**: messages 를 **gzip** 후 선택형 백엔드(**DB BLOB / 로컬 디렉터리 / S3**)에 `<owner>/<project>/<conversation>.json.gz` 구조로 저장. 어드민 `/admin/sessions` 에서 백엔드 선택(로그 저장과 동일 방식, 설정은 분리). S3 시크릿 AES-GCM.
 - **계정별 세션 캡(하드)**: 신규 대화 세션 수가 한도 도달 시 **429**(`rate_limited`) 거부(기존 세션 업서트는 허용). 한도 = 멤버별 오버라이드(>0) 우선, 없으면 전역 기본(`session_settings.default_max_sessions`), 0=무제한. 어드민 `/admin/sessions`(전역) + 멤버 모달(개별).
+
+### 실시간 채팅 — 사용자 간 메시징 (user, 중첩 envelope, 멤버십 스코프)
+**LLM `POST /chat` 과는 별개**의 **사람↔사람** 채팅이다. **단체(group)·1:1(direct)** 방을 지원하고, 메시지는 **RDB 영속**(이력 조회 가능), 실시간 전파는 **WebSocket + 인메모리 허브**(단일 인스턴스 브로드캐스트). 모든 REST/WS 는 **방 멤버만** 접근(비멤버 403).
+
+| 메서드·경로 | 기능 |
+|---|---|
+| `GET /api/v1/chat/ws` | **WebSocket 업그레이드**. Bearer 헤더로 인증(쿼리 토큰 미지원 — C# 클라이언트는 헤더 가능). 연결 후 송수신 |
+| `GET /api/v1/chat/rooms` | 본인이 속한 방 목록 `{rooms:[{id,type,name?,created_at,unread_count}]}` (최근 활동순, 방별 **안읽음 수** 포함) |
+| `POST /api/v1/chat/rooms` | 단체 방 생성 `{name, member_ids[]}` → `{id,type:"group",name,created_at,unread_count}`(201). 생성자 자동 포함 |
+| `POST /api/v1/chat/rooms/direct` | 1:1 방 가져오기/생성 `{user_id}` → 방(200). 정준 키로 **중복 생성 방지**(이미 있으면 그 방 반환). 자기 자신 400 |
+| `GET /api/v1/chat/rooms/{id}/messages?limit=&before=` | 메시지 이력(최신순) `{messages:[{id,room_id,sender_id,content,created_at,edited_at?,deleted?}]}`. `limit`(기본 50, 최대 200), `before`=메시지 id(그 이전 페이지). 삭제 메시지는 순서 유지 위해 포함하되 `content:""`·`deleted:true`. **REST 응답 DTO 는 `mentions`/`attachments` 를 싣지 않는다**(현재는 WS `message` 이벤트 DTO 에만 포함 — 아래 참조) |
+| `POST /api/v1/chat/rooms/{id}/messages` | REST 로 메시지 전송 `{content, mentions?:[memberId], attachments?:[{file_name,content_type,size_bytes,url}]}` → 메시지(201). 멘션은 방 멤버로 검증(비멤버 제거), 첨부는 먼저 `POST /chat/attachments` 로 업로드한 뒤 그 메타데이터를 동봉. 본문·첨부 둘 다 없으면 400 |
+| `PATCH /api/v1/chat/rooms/{id}/messages/{mid}` | **본인 메시지 수정** `{content}` → 메시지(200, `edited_at` 기록). 남의 메시지 403, 삭제된 메시지 404 |
+| `DELETE /api/v1/chat/rooms/{id}/messages/{mid}` | **본인 메시지 삭제**(소프트, 204). content 비우고 `deleted` 표시. 남의 메시지 403. 재삭제 idempotent |
+| `POST /api/v1/chat/rooms/{id}/read` | 방을 **지금까지 읽음 처리** → `{room_id,last_read_at}`(200). 읽음 위치는 **단조 증가**(뒤로 안 감) + 방 멤버에게 WS `read` 이벤트 브로드캐스트 |
+| `GET /api/v1/chat/rooms/{id}/reads` | 멤버별 **읽음 위치**(읽음 표시 렌더용) `{reads:[{member_id,last_read_at}]}`. 메시지는 `member.last_read_at >= message.created_at` 이면 그 멤버가 읽은 것 |
+| `GET /api/v1/chat/unread` | 총/방별 안읽음 배지 `{total, rooms:{<roomId>:<count>}}` (count>0 만 포함) |
+| `GET /api/v1/chat/rooms/{id}/members` | 방 멤버 목록 `{members:[<memberId>]}` |
+| `POST /api/v1/chat/rooms/{id}/members` | **단체 방에 멤버 추가** `{member_ids[]}` → 갱신된 `{members[]}`(200). **group 한정**(1:1 → 400), 멤버만, 이미 멤버는 무시. 추가 멤버는 가입 시점부터 안읽음 카운트(이전 메시지 제외) |
+| `DELETE /api/v1/chat/rooms/{id}/members/{mid}` | **강퇴**(204) — **방 생성자(creator)만**, group 한정. 본인 강퇴 400(→leave), 비멤버 대상 403, 비생성자 403. 강퇴 대상 포함 멤버에게 `member_left` 브로드캐스트 |
+| `POST /api/v1/chat/rooms/{id}/leave` | **본인이 방에서 나가기**(204). **group 한정**(1:1 → 400) |
+| `GET /api/v1/chat/rooms/{id}/presence` | 방 멤버 중 **온라인** 목록 `{online:[memberId]}` |
+| `GET /api/v1/chat/mentions?limit=` | **나를 멘션한** 최신 메시지(삭제 제외) `{messages:[...]}` — 알림 피드 |
+| `POST /api/v1/chat/attachments` | **파일 업로드**(`multipart/form-data`, 파트명 `file`) → 첨부 메타데이터 `{id,file_name,content_type,size_bytes,url}`(201). 최대 **10 MiB**, 초과 400. 반환 `url` 을 메시지의 `attachments[].url` 로 사용 |
+| `GET /api/v1/chat/attachments/{aid}` | **파일 다운로드**(바이너리). `Content-Type`/`Content-Disposition`(파일명)/`Content-Length`/`X-Content-Type-Options: nosniff` 헤더 포함. 인증 필요(불투명 UUID) |
+
+**WebSocket 프로토콜** (텍스트 프레임, JSON)
+- **클라 → 서버**(전송):
+  - 메시지: `{"type":"send","room_id":"<id>","content":"<text>"}` — 비멤버/빈 내용 등 실패 시 **그 연결로만** 오류 통지 `{"type":"error","error":"..."}`(브로드캐스트 안 함).
+  - 타이핑: `{"type":"typing","room_id":"<id>","state":"start"|"stop"}` — **휘발성**(저장 안 함). 클라가 입력 시작/중단을 디바운스해 전송.
+  - 메시지 전송에 멘션/첨부 동봉 가능: `{"type":"send","room_id","content","mentions":[...],"attachments":[...]}` (REST 와 동일 의미).
+- **서버 → 클라**(수신):
+  - 메시지: `{"type":"message","message":{"id","room_id","sender_id","content","created_at","edited_at"?,"deleted"?,"mentions"?,"attachments"?}}` — **발신자 포함** 방 멤버 전원에게 전파(다기기 일관성). WS DTO 는 `mentions`/`attachments`(둘 다 omitempty)도 싣는다(REST 이력 응답과 달리). `edited_at`/`deleted` 는 비어 있으면 생략.
+  - 메시지 수정/삭제: `{"type":"message_edited"|"message_deleted","message":{...,"edited_at"?,"deleted"?}}` — 수정/삭제 시 방 멤버에게 전파(클라가 해당 메시지 갱신/"삭제된 메시지" 표시).
+  - 읽음: `{"type":"read","read":{"room_id","member_id","last_read_at"}}` — 누군가 `POST .../read` 하면 방 멤버에게 전파(읽음 표시 실시간 갱신).
+  - 타이핑: `{"type":"typing","typing":{"room_id","member_id","state"}}` — **발신자 제외** 방 멤버에게 전파(저장·이력 없음).
+  - 멤버 변경: `{"type":"member_joined"|"member_left","member":{"room_id","member_id"}}` — 단체 방 멤버 추가/나가기/강퇴 시 방 멤버에게 전파(클라가 멤버 목록 갱신).
+  - 온라인 상태: `{"type":"presence","presence":{"member_id","online"}}` — 멤버의 첫 연결(online)/마지막 연결 해제(offline) 시 **같은 방을 공유하는 멤버들**에게 전파.
+- keepalive: 서버가 주기적 **ping**, 클라는 pong 응답(미응답 시 연결 종료). 한 사용자가 여러 기기/탭으로 다중 연결 가능.
+
+> 시각은 unix epoch(초). 방/메시지/읽음위치는 `chat_rooms`·`chat_room_members`(`last_read_at`)·`chat_messages`(`edited_at`/`deleted_at`/`mentions`/`attachments`) 테이블. **첨부 바이너리는 `chat_attachments`(BLOB) 테이블**에 저장(메타데이터 + 바이너리). 향후 파일/S3 백엔드로 교체 가능하도록 `AttachmentStore` 포트로 추상화. **안읽음** = 내 `last_read_at` 이후 **남이 보낸**(삭제 제외) 메시지 수. **온라인 상태(presence)는 메모리(허브)에만** 있어 저장하지 않는다 — 재기동/오프라인 시 사라짐.
+>
+> **다중 인스턴스(LB)**: `config` 의 `messaging.broadcaster` 로 전환한다 — `memory`(기본, 단일 인스턴스) | `redis`(다중 인스턴스 **Redis pub/sub**). `redis` 면 메시지·수정/삭제·읽음·타이핑·멤버 변경 이벤트가 인스턴스 간 실시간 전파된다. (단, presence 온라인 **스냅샷 조회**(`GET .../presence`)와 전환 감지는 인스턴스별 로컬 연결 기준 — 이벤트는 전파되나 조회는 그 인스턴스에 붙은 연결만 반영. 완전한 분산 presence 는 후속 과제.) 이력/안읽음/멘션/첨부는 DB 라 어느 인스턴스에서나 조회 가능.
 
 ### 대화 이력 / 감사 로깅
 - **감사 로깅**: 모든 slog 이벤트가 **비동기 핸들러**(버퍼+워커)로 비차단 기록. `event` taxonomy: `auth.*`/`member.*`/`provider.*`/`chat.request`/`agent.request`(메타데이터만, 본문·시크릿 미기록). 헬스 제외, `request_id` 상관관계.

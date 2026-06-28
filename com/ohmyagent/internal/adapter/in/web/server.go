@@ -15,9 +15,12 @@ import (
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
+	domainclientversion "aiagent/com/ohmyagent/internal/domain/clientversion"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
+	domainmessaging "aiagent/com/ohmyagent/internal/domain/messaging"
 	domainproject "aiagent/com/ohmyagent/internal/domain/project"
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
 
@@ -46,6 +49,27 @@ type quotaManager interface {
 	ResetUsage(ctx context.Context, actorID, memberID string) error
 }
 
+// toolPolicyManager 는 어드민 도구 정책 편집이 사용하는 소비자 인터페이스다(*toolpolicyapp.Manager 가 충족).
+type toolPolicyManager interface {
+	GetSettings(ctx context.Context, actorID string) (domaintoolpolicy.Settings, error)
+	UpdateSettings(ctx context.Context, cmd domaintoolpolicy.UpdateCommand) error
+}
+
+// clientVersionManager 는 어드민 클라이언트 버전 편집이 사용하는 소비자 인터페이스다(*clientversionapp.Manager 가 충족).
+type clientVersionManager interface {
+	GetSettings(ctx context.Context, actorID string) (domainclientversion.Settings, error)
+	UpdateSettings(ctx context.Context, cmd domainclientversion.UpdateCommand) error
+}
+
+// chatManager 는 어드민 채팅 관리/모더레이션이 사용하는 소비자 인터페이스다(*messagingapp.Service 가 충족).
+type chatManager interface {
+	AdminStats(ctx context.Context) (domainmessaging.AdminStats, error)
+	AdminListRooms(ctx context.Context, limit int) ([]domainmessaging.AdminRoom, error)
+	AdminRoomDetail(ctx context.Context, roomID string) (domainmessaging.Room, []string, []domainmessaging.Message, error)
+	AdminDeleteMessage(ctx context.Context, messageID string) error
+	AdminDeleteRoom(ctx context.Context, roomID string) error
+}
+
 //go:embed templates/*.html
 var templatesFS embed.FS
 
@@ -59,31 +83,37 @@ const (
 
 // Server 는 어드민 웹 어댑터다. use case 를 직접 호출한다.
 type Server struct {
-	auth        domainauth.Service
-	providers   domainllmprovider.Service
-	transcripts transcriptManager
-	quota       quotaManager
-	sessions    sessionManager
-	tokens      domainauth.TokenService
-	cookieTTL   time.Duration
-	secure      bool // 운영(prod)에서 Secure 쿠키 플래그
-	login       *template.Template
-	pages       map[string]*template.Template
+	auth          domainauth.Service
+	providers     domainllmprovider.Service
+	transcripts   transcriptManager
+	quota         quotaManager
+	sessions      sessionManager
+	toolPolicy    toolPolicyManager
+	clientVersion clientVersionManager
+	chat          chatManager
+	tokens        domainauth.TokenService
+	cookieTTL     time.Duration
+	secure        bool // 운영(prod)에서 Secure 쿠키 플래그
+	login         *template.Template
+	pages         map[string]*template.Template
 }
 
 // NewServer 는 어드민 웹 서버를 생성하고 템플릿을 파싱한다.
-func NewServer(auth domainauth.Service, providers domainllmprovider.Service, transcripts transcriptManager, quota quotaManager, sessions sessionManager, tokens domainauth.TokenService, cookieTTL time.Duration, secure bool) *Server {
+func NewServer(auth domainauth.Service, providers domainllmprovider.Service, transcripts transcriptManager, quota quotaManager, sessions sessionManager, toolPolicy toolPolicyManager, clientVersion clientVersionManager, chat chatManager, tokens domainauth.TokenService, cookieTTL time.Duration, secure bool) *Server {
 	return &Server{
-		auth:        auth,
-		providers:   providers,
-		transcripts: transcripts,
-		quota:       quota,
-		sessions:    sessions,
-		tokens:      tokens,
-		cookieTTL:   cookieTTL,
-		secure:      secure,
-		login:       template.Must(template.ParseFS(templatesFS, "templates/login.html")),
-		pages:       parsePages(),
+		auth:          auth,
+		providers:     providers,
+		transcripts:   transcripts,
+		quota:         quota,
+		sessions:      sessions,
+		toolPolicy:    toolPolicy,
+		clientVersion: clientVersion,
+		chat:          chat,
+		tokens:        tokens,
+		cookieTTL:     cookieTTL,
+		secure:        secure,
+		login:         template.Must(template.ParseFS(templatesFS, "templates/login.html")),
+		pages:         parsePages(),
 	}
 }
 
@@ -123,7 +153,7 @@ func commaInt(n int) string {
 
 // parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다(공용 함수 주입).
 func parsePages() map[string]*template.Template {
-	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions"}
+	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions", "tools", "client", "chat", "chat_room"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
 		out[n] = template.Must(template.New("layout.html").Funcs(templateFuncs).ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
@@ -169,6 +199,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+basePath+"/sessions", s.authed(s.sessionsPage))
 	mux.HandleFunc("POST "+basePath+"/sessions", s.authed(s.sessionsUpdate))
 	mux.HandleFunc("POST "+basePath+"/sessions/test", s.authed(s.sessionsTest))
+
+	mux.HandleFunc("GET "+basePath+"/tools", s.authed(s.toolsPage))
+	mux.HandleFunc("POST "+basePath+"/tools", s.authed(s.toolsUpdate))
+
+	mux.HandleFunc("GET "+basePath+"/client", s.authed(s.clientPage))
+	mux.HandleFunc("POST "+basePath+"/client", s.authed(s.clientUpdate))
+
+	mux.HandleFunc("GET "+basePath+"/chat", s.authed(s.chatPage))
+	mux.HandleFunc("GET "+basePath+"/chat/rooms/{id}", s.authed(s.chatRoomPage))
+	mux.HandleFunc("POST "+basePath+"/chat/rooms/{id}/delete", s.authed(s.chatRoomDelete))
+	mux.HandleFunc("POST "+basePath+"/chat/messages/{id}/delete", s.authed(s.chatMessageDelete))
 }
 
 // authed 는 쿠키의 JWT 를 검증하고 claims 를 context 에 주입한다. 실패 시 로그인으로 리다이렉트.

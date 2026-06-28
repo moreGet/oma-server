@@ -1,17 +1,22 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
+	domainclientversion "aiagent/com/ohmyagent/internal/domain/clientversion"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 	domainproject "aiagent/com/ohmyagent/internal/domain/project"
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
+	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
 
@@ -102,6 +107,9 @@ type dashboardView struct {
 	ByRole         []roleCount
 	ProviderTotal  int
 	ActiveProvider string
+	ShowChat       bool
+	ChatRooms      int
+	ChatMessages   int
 }
 
 type membersView struct {
@@ -205,6 +213,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 				dv.ActiveProvider = p.Name
 				break
 			}
+		}
+	}
+	if pd.CanManage {
+		dv.ShowChat = true
+		if st, err := s.chat.AdminStats(r.Context()); err == nil {
+			dv.ChatRooms = st.Rooms
+			dv.ChatMessages = st.Messages
 		}
 	}
 	pd.Data = dv
@@ -594,6 +609,306 @@ func (s *Server) sessionsTest(w http.ResponseWriter, r *http.Request) {
 		s.setFlash(w, "연결 테스트에 성공했습니다.")
 	}
 	s.redirect(w, r, basePath+"/sessions")
+}
+
+// --- 클라이언트 버전(/admin/client) ---
+
+type clientVersionView struct {
+	Latest           string
+	MinimumSupported string
+	DownloadURL      string
+	Notice           string
+	Mandatory        bool
+	UpdatedAt        string
+	UpdatedBy        string
+}
+
+func (s *Server) clientPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "클라이언트 버전", "client")
+	st, err := s.clientVersion.GetSettings(r.Context(), actorID(r))
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/")
+		return
+	}
+	pd.Data = clientVersionView{
+		Latest: st.Latest, MinimumSupported: st.MinimumSupported, DownloadURL: st.DownloadURL,
+		Notice: st.Notice, Mandatory: st.Mandatory, UpdatedAt: fmtUnixKST(st.UpdatedAt), UpdatedBy: st.UpdatedBy,
+	}
+	s.render(w, "client", pd)
+}
+
+func (s *Server) clientUpdate(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	err := s.clientVersion.UpdateSettings(r.Context(), domainclientversion.UpdateCommand{
+		ActorID: actorID(r),
+		Settings: domainclientversion.Settings{
+			Latest:           r.FormValue("latest"),
+			MinimumSupported: r.FormValue("minimum_supported"),
+			DownloadURL:      r.FormValue("download_url"),
+			Notice:           r.FormValue("notice"),
+			Mandatory:        r.FormValue("mandatory") == "on",
+		},
+	})
+	s.flashResult(w, err, "클라이언트 버전 설정을 저장했습니다.")
+	s.redirect(w, r, basePath+"/client")
+}
+
+// --- 채팅 관리(/admin/chat) ---
+
+type chatStatsView struct {
+	Rooms, GroupRooms, DirectRooms         int
+	Messages, DeletedMessages, Attachments int
+	AttachmentSize                         string
+}
+
+type adminRoomRow struct {
+	ID, Type, Name            string
+	MemberCount, MessageCount int
+	LastActivity              string
+}
+
+type chatView struct {
+	Stats chatStatsView
+	Rooms []adminRoomRow
+}
+
+type adminMsgRow struct {
+	ID, SenderID, Content, CreatedAt string
+	Deleted                          bool
+	Attachments                      int
+}
+
+type chatRoomView struct {
+	ID, Type, Name string
+	Members        []string
+	Messages       []adminMsgRow
+}
+
+// requireManage 는 admin↑ 가 아니면 플래시 후 대시보드로 보내고 false 를 반환한다(어드민 게이트).
+func (s *Server) requireManage(w http.ResponseWriter, r *http.Request) bool {
+	if c, ok := security.ClaimsFrom(r.Context()); ok && c.Level >= domainauth.RoleLevelAdmin {
+		return true
+	}
+	s.setFlashError(w, "권한이 없습니다.")
+	s.redirect(w, r, basePath+"/")
+	return false
+}
+
+func roomLabel(typ, name string) string {
+	if typ == "direct" {
+		return "1:1 대화"
+	}
+	if strings.TrimSpace(name) == "" {
+		return "(이름 없음)"
+	}
+	return name
+}
+
+func (s *Server) chatPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "채팅 관리", "chat")
+	if !s.requireManage(w, r) {
+		return
+	}
+	stats, err := s.chat.AdminStats(r.Context())
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/")
+		return
+	}
+	rooms, _ := s.chat.AdminListRooms(r.Context(), 200)
+	cv := chatView{Stats: chatStatsView{
+		Rooms: stats.Rooms, GroupRooms: stats.GroupRooms, DirectRooms: stats.DirectRooms,
+		Messages: stats.Messages, DeletedMessages: stats.DeletedMessages,
+		Attachments: stats.Attachments, AttachmentSize: humanBytes(stats.AttachmentBytes),
+	}}
+	for _, rm := range rooms {
+		cv.Rooms = append(cv.Rooms, adminRoomRow{
+			ID: rm.ID, Type: string(rm.Type), Name: roomLabel(string(rm.Type), rm.Name),
+			MemberCount: rm.MemberCount, MessageCount: rm.MessageCount, LastActivity: fmtUnixKST(rm.LastActivity),
+		})
+	}
+	pd.Data = cv
+	s.render(w, "chat", pd)
+}
+
+func (s *Server) chatRoomPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "채팅 방", "chat")
+	if !s.requireManage(w, r) {
+		return
+	}
+	room, members, msgs, err := s.chat.AdminRoomDetail(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/chat")
+		return
+	}
+	rv := chatRoomView{ID: room.ID, Type: string(room.Type), Name: roomLabel(string(room.Type), room.Name), Members: members}
+	for _, m := range msgs {
+		rv.Messages = append(rv.Messages, adminMsgRow{
+			ID: m.ID, SenderID: m.SenderID, Content: m.Content, CreatedAt: fmtUnixKST(m.CreatedAt),
+			Deleted: m.DeletedAt > 0, Attachments: len(m.Attachments),
+		})
+	}
+	pd.Data = rv
+	s.render(w, "chat_room", pd)
+}
+
+func (s *Server) chatRoomDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireManage(w, r) {
+		return
+	}
+	err := s.chat.AdminDeleteRoom(r.Context(), r.PathValue("id"))
+	s.flashResult(w, err, "방을 삭제했습니다.")
+	s.redirect(w, r, basePath+"/chat")
+}
+
+func (s *Server) chatMessageDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireManage(w, r) {
+		return
+	}
+	_ = r.ParseForm()
+	roomID := r.FormValue("room_id")
+	err := s.chat.AdminDeleteMessage(r.Context(), r.PathValue("id"))
+	s.flashResult(w, err, "메시지를 삭제했습니다.")
+	if roomID != "" {
+		s.redirect(w, r, basePath+"/chat/rooms/"+roomID)
+		return
+	}
+	s.redirect(w, r, basePath+"/chat")
+}
+
+// humanBytes 는 바이트 수를 사람이 읽는 단위로 포맷한다.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// --- 도구 정책(/admin/tools) ---
+
+// toolPolicyView 는 도구 정책 편집 화면 데이터다.
+// enabled/disabled 는 줄바꿈 목록, 차단 패턴/경로는 JSON 텍스트로 편집한다.
+type toolPolicyView struct {
+	Mode         string
+	Enabled      string // 줄바꿈 구분 도구명
+	Disabled     string
+	PatternsJSON string // [{type,pattern,reason,script_type}]
+	PathsJSON    string // [{type,pattern,reason}]
+	UpdatedAt    string // KST, 비어있으면 미저장
+	UpdatedBy    string
+}
+
+func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "도구 정책", "tools")
+	st, err := s.toolPolicy.GetSettings(r.Context(), actorID(r))
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/")
+		return
+	}
+	pd.Data = toolPolicyView{
+		Mode:         st.Mode,
+		Enabled:      strings.Join(st.Enabled, "\n"),
+		Disabled:     strings.Join(st.Disabled, "\n"),
+		PatternsJSON: marshalIndent(st.BlockedPatterns),
+		PathsJSON:    marshalIndent(st.BlockedPaths),
+		UpdatedAt:    fmtUnixKST(st.UpdatedAt),
+		UpdatedBy:    st.UpdatedBy,
+	}
+	s.render(w, "tools", pd)
+}
+
+func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	patterns, perr := parseBlockedPatterns(r.FormValue("blocked_patterns"))
+	paths, qerr := parseBlockedPaths(r.FormValue("blocked_paths"))
+	if perr != nil || qerr != nil {
+		s.setFlashError(w, "차단 패턴/경로 JSON 형식 오류 — 입력을 확인하세요.")
+		s.redirect(w, r, basePath+"/tools")
+		return
+	}
+	err := s.toolPolicy.UpdateSettings(r.Context(), domaintoolpolicy.UpdateCommand{
+		ActorID: actorID(r),
+		Settings: domaintoolpolicy.Settings{
+			Mode:            r.FormValue("mode"),
+			Enabled:         splitLines(r.FormValue("enabled")),
+			Disabled:        splitLines(r.FormValue("disabled")),
+			BlockedPatterns: patterns,
+			BlockedPaths:    paths,
+		},
+	})
+	s.flashResult(w, err, "도구 정책을 저장했습니다.")
+	s.redirect(w, r, basePath+"/tools")
+}
+
+// splitLines 는 줄바꿈 구분 텍스트를 trim·빈 줄 제거한 슬라이스로 만든다.
+func splitLines(s string) []string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if v := strings.TrimSpace(ln); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// parseBlockedPatterns 는 JSON 텍스트(빈 값=없음)를 패턴 슬라이스로 파싱한다.
+func parseBlockedPatterns(s string) ([]domaintoolpolicy.BlockedPattern, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var out []domaintoolpolicy.BlockedPattern
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// parseBlockedPaths 는 JSON 텍스트(빈 값=없음)를 경로 슬라이스로 파싱한다.
+func parseBlockedPaths(s string) ([]domaintoolpolicy.BlockedPath, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var out []domaintoolpolicy.BlockedPath
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// marshalIndent 는 슬라이스를 보기 좋은 JSON 텍스트로 직렬화한다(빈 슬라이스는 빈 문자열).
+func marshalIndent(v any) string {
+	switch t := v.(type) {
+	case []domaintoolpolicy.BlockedPattern:
+		if len(t) == 0 {
+			return ""
+		}
+	case []domaintoolpolicy.BlockedPath:
+		if len(t) == 0 {
+			return ""
+		}
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// fmtUnixKST 는 unix 초를 KST 표시 문자열로 변환한다(0이면 빈 문자열).
+func fmtUnixKST(sec int64) string {
+	if sec <= 0 {
+		return ""
+	}
+	return time.Unix(sec, 0).In(kstZone).Format(uiTimeFormat)
 }
 
 func (s *Server) memberSetSessionLimit(w http.ResponseWriter, r *http.Request) {

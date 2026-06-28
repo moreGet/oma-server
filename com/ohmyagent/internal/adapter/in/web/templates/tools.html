@@ -1,0 +1,64 @@
+{{define "content"}}
+{{if .CanManage}}
+<div class="card" style="max-width:50rem">
+  <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+    <span class="fw-semibold"><i class="bi bi-hammer me-1"></i> 도구 정책</span>
+    {{if .Data.UpdatedAt}}<small class="text-secondary">최종 수정 {{.Data.UpdatedAt}} (KST){{if .Data.UpdatedBy}} · {{.Data.UpdatedBy}}{{end}}</small>{{end}}
+  </div>
+  <div class="card-body">
+    <form method="post" action="/admin/tools" class="vstack gap-3">
+
+      {{/* 정책 모드 */}}
+      <div>
+        <label class="form-label small text-secondary mb-1">정책 적용 시점</label>
+        <div class="btn-group d-block" role="group">
+          <input type="radio" class="btn-check" name="mode" id="mCached" value="cached" {{if ne .Data.Mode "realtime"}}checked{{end}}>
+          <label class="btn btn-sm btn-outline-light" for="mCached">cached (로그인 시 1회)</label>
+          <input type="radio" class="btn-check" name="mode" id="mRealtime" value="realtime" {{if eq .Data.Mode "realtime"}}checked{{end}}>
+          <label class="btn btn-sm btn-outline-light" for="mRealtime">realtime (매 실행 질의)</label>
+        </div>
+      </div>
+
+      {{/* 노출/실행 도구 */}}
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label small text-secondary mb-1">허용 도구 (한 줄에 하나)</label>
+          <textarea name="enabled" class="form-control font-monospace" rows="5" placeholder="비우면 전체 허용&#10;read_file&#10;write_file&#10;grep">{{.Data.Enabled}}</textarea>
+          <div class="form-text">비우면 전체 허용(화이트리스트 아님). 지정 시 목록 외 도구는 노출·실행 차단.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small text-secondary mb-1">차단 도구 (한 줄에 하나)</label>
+          <textarea name="disabled" class="form-control font-monospace" rows="5" placeholder="kill_process&#10;screenshot">{{.Data.Disabled}}</textarea>
+          <div class="form-text">허용 목록보다 우선. 여기 있는 도구는 항상 차단.</div>
+        </div>
+      </div>
+
+      <hr class="my-1">
+
+      {{/* 위험명령/경로 차단 패턴 (JSON) */}}
+      <div>
+        <label class="form-label small text-secondary mb-1">위험명령 차단 패턴 <span class="text-secondary">(JSON 배열)</span></label>
+        <textarea name="blocked_patterns" class="form-control font-monospace" rows="6" spellcheck="false" placeholder='[
+  { "type": "regex", "pattern": "\\bnet\\s+user\\b", "reason": "계정 조작 금지", "script_type": "any" }
+]'>{{.Data.PatternsJSON}}</textarea>
+        <div class="form-text"><code>type</code>: <code>regex</code>|<code>substring</code>(기본) · <code>script_type</code>: <code>any</code>(기본)|<code>powershell</code>|<code>cmd</code>. 클라 내장 디폴트에 <b>추가만</b> 됩니다(2중 안전).</div>
+      </div>
+
+      <div>
+        <label class="form-label small text-secondary mb-1">차단 경로 패턴 <span class="text-secondary">(JSON 배열)</span></label>
+        <textarea name="blocked_paths" class="form-control font-monospace" rows="4" spellcheck="false" placeholder='[
+  { "type": "substring", "pattern": "D:\\sensitive", "reason": "민감 디렉토리" }
+]'>{{.Data.PathsJSON}}</textarea>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+<p class="text-secondary small mt-3 mb-0">이 정책은 클라이언트가 로그인 시(또는 매 실행) 받아 적용합니다. 서버는 도구를 직접 실행하지 않습니다.</p>
+{{else}}
+<div class="alert alert-info">관리자만 접근할 수 있습니다.</div>
+{{end}}
+{{end}}

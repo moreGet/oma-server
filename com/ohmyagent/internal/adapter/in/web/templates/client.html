@@ -1,0 +1,42 @@
+{{define "content"}}
+{{if .CanManage}}
+<div class="card" style="max-width:42rem">
+  <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+    <span class="fw-semibold"><i class="bi bi-app-indicator me-1"></i> 클라이언트 버전 점검</span>
+    {{if .Data.UpdatedAt}}<small class="text-secondary">최종 수정 {{.Data.UpdatedAt}} (KST){{if .Data.UpdatedBy}} · {{.Data.UpdatedBy}}{{end}}</small>{{end}}
+  </div>
+  <div class="card-body">
+    <form method="post" action="/admin/client" class="vstack gap-3">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label small text-secondary mb-1">최신 버전 (SemVer)</label>
+          <input type="text" name="latest" class="form-control" value="{{.Data.Latest}}" placeholder="1.2.0">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small text-secondary mb-1">최소 지원 버전</label>
+          <input type="text" name="minimum_supported" class="form-control" value="{{.Data.MinimumSupported}}" placeholder="1.0.0">
+        </div>
+      </div>
+      <div>
+        <label class="form-label small text-secondary mb-1">다운로드 URL <span class="text-secondary">(비우면 응답에서 생략)</span></label>
+        <input type="text" name="download_url" class="form-control" value="{{.Data.DownloadURL}}" placeholder="https://...">
+      </div>
+      <div>
+        <label class="form-label small text-secondary mb-1">안내 문구 <span class="text-secondary">(비우면 생략)</span></label>
+        <input type="text" name="notice" class="form-control" value="{{.Data.Notice}}" placeholder="예: 보안 업데이트가 포함되어 있습니다.">
+      </div>
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="mandatory" id="cvMandatory" {{if .Data.Mandatory}}checked{{end}}>
+        <label class="form-check-label" for="cvMandatory">강제 업데이트(mandatory) — 최소 버전 미만 클라 차단 유도</label>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+<p class="text-secondary small mt-3 mb-0">클라이언트가 <code>GET /api/v1/client/version</code> 으로 받아 자기 버전과 비교해 업데이트 알림을 띄웁니다. 저장 즉시 반영됩니다.</p>
+{{else}}
+<div class="alert alert-info">관리자만 접근할 수 있습니다.</div>
+{{end}}
+{{end}}

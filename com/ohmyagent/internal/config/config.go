@@ -32,54 +32,37 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Config 는 애플리케이션 전역 설정이다.
 type Config struct {
-	Env           string              // APP_ENV 에서 주입(yaml 아님)
-	resetDB       bool                // APP_DB_RESET 에서 주입(yaml 아님). DB 파괴적 초기화 옵트인.
-	Server        ServerConfig        `yaml:"server"`
-	Security      SecurityConfig      `yaml:"security"`
-	Database      DatabaseConfig      `yaml:"database"`
-	Auth          AuthConfig          `yaml:"auth"`
-	ToolPolicy    ToolPolicyConfig    `yaml:"tool_policy"`
-	ClientVersion ClientVersionConfig `yaml:"client_version"`
-	CommandPolicy CommandPolicyConfig `yaml:"command_policy"`
+	Env       string          // APP_ENV 에서 주입(yaml 아님)
+	resetDB   bool            // APP_DB_RESET 에서 주입(yaml 아님). DB 파괴적 초기화 옵트인.
+	Server    ServerConfig    `yaml:"server"`
+	Security  SecurityConfig  `yaml:"security"`
+	Database  DatabaseConfig  `yaml:"database"`
+	Auth      AuthConfig      `yaml:"auth"`
+	Messaging MessagingConfig `yaml:"messaging"`
 }
 
-// CommandPolicyConfig 는 서버 제어형 위험명령/경로 차단 정책(GET /api/v1/security/command-policy)이다.
-// "2중 안전" 원칙: 클라 내장 디폴트에 서버가 패턴을 추가만 한다(끄는 필드 없음). 비우면 클라 디폴트만 적용.
-type CommandPolicyConfig struct {
-	BlockedPatterns []BlockedPattern `yaml:"blocked_patterns"`
-	BlockedPaths    []BlockedPath    `yaml:"blocked_paths"`
+// MessagingConfig 는 채팅 실시간 전파 방식 설정이다.
+//   - broadcaster: "memory"(기본, 단일 인스턴스) | "redis"(다중 인스턴스 pub/sub)
+type MessagingConfig struct {
+	Broadcaster string      `yaml:"broadcaster"` // memory | redis
+	Redis       RedisConfig `yaml:"redis"`
 }
 
-// BlockedPattern 은 차단할 명령 패턴 1건이다(type 생략=substring, script_type 생략=any).
-type BlockedPattern struct {
-	Type       string `yaml:"type"`        // regex | substring
-	Pattern    string `yaml:"pattern"`     // 패턴 문자열
-	Reason     string `yaml:"reason"`      // 차단 사유(표시/로그)
-	ScriptType string `yaml:"script_type"` // any | powershell | cmd
+// RedisConfig 는 redis broadcaster 접속 설정이다(broadcaster=redis 일 때).
+type RedisConfig struct {
+	Addr     string `yaml:"addr"`     // host:port (예: localhost:6379)
+	Password string `yaml:"password"` // 운영은 env(APP_MESSAGING_REDIS_PASSWORD) override
+	DB       int    `yaml:"db"`       // 논리 DB 번호(기본 0)
+	Channel  string `yaml:"channel"`  // pub/sub 채널명(미설정 시 기본값)
 }
 
-// BlockedPath 는 차단할 경로 패턴 1건이다(type 생략=substring).
-type BlockedPath struct {
-	Type    string `yaml:"type"`    // regex | substring
-	Pattern string `yaml:"pattern"` // 경로 패턴
-	Reason  string `yaml:"reason"`  // 차단 사유
+// UsesRedisBroadcaster 는 redis 전파 방식 사용 여부를 반환한다.
+func (c *Config) UsesRedisBroadcaster() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Messaging.Broadcaster), "redis")
 }
 
-// ToolPolicyConfig 는 클라이언트 도구 실행 정책(GET /api/v1/tools/policy)이다.
-type ToolPolicyConfig struct {
-	Mode     string   `yaml:"mode"`     // cached | realtime (기본 cached)
-	Enabled  []string `yaml:"enabled"`  // nil/생략 = 전체 허용. 지정 시 화이트리스트
-	Disabled []string `yaml:"disabled"` // 블랙리스트(enabled 보다 우선)
-}
-
-// ClientVersionConfig 는 클라이언트 버전 점검(GET /api/v1/client/version)이다.
-type ClientVersionConfig struct {
-	Latest           string `yaml:"latest"`
-	MinimumSupported string `yaml:"minimum_supported"`
-	DownloadURL      string `yaml:"download_url"`
-	Notice           string `yaml:"notice"`
-	Mandatory        bool   `yaml:"mandatory"`
-}
+// 참고: 도구 정책(tool_policy)·위험명령 차단(command_policy)·클라이언트 버전(client_version)은
+// 이제 DB 에서 관리되고 어드민(`/admin/tools`, `/admin/client`)에서 편집한다. yaml 설정이 아니다.
 
 // ServerConfig 는 HTTP 서버 설정이다.
 type ServerConfig struct {
@@ -212,6 +195,9 @@ func (c *Config) injectSecrets() {
 	}
 	if v := strings.TrimSpace(os.Getenv("APP_ENCRYPTION_SECRET")); v != "" {
 		c.Security.EncryptionSecret = v
+	}
+	if v := strings.TrimSpace(os.Getenv("APP_MESSAGING_REDIS_PASSWORD")); v != "" {
+		c.Messaging.Redis.Password = v
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_DB_RESET"))) {
 	case "1", "true", "yes", "on":

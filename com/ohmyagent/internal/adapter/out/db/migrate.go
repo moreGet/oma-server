@@ -59,8 +59,11 @@ func newProvider(driver string, conn *sql.DB) (*goose.Provider, error) {
 		return nil, fmt.Errorf("db: sub migrations fs: %w", err)
 	}
 
-	// SQL 마이그레이션(1..9) + 조건부 Go 마이그레이션(10/11, idempotent column add).
-	provider, err := goose.NewProvider(dialect, conn, sub, goose.WithGoMigrations(goMigrations(driver)...))
+	// SQL 마이그레이션(1..9, 12+) + 조건부 Go 마이그레이션(10/11, idempotent column add).
+	// AllowOutofOrder: in-place 편집으로 생긴 혼합 상태(중간 버전 누락)에서도 누락분을 보강 적용한다.
+	provider, err := goose.NewProvider(dialect, conn, sub,
+		goose.WithGoMigrations(goMigrations(driver)...),
+		goose.WithAllowOutofOrder(true))
 	if err != nil {
 		return nil, fmt.Errorf("db: new goose provider: %w", err)
 	}

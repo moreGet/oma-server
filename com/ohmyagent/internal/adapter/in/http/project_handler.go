@@ -47,8 +47,8 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) error {
 func (h *ProjectHandler) Upsert(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	var req createProjectReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	p, err := h.svc.UpsertProject(r.Context(), domainproject.UpsertProjectCommand{
 		OwnerID: ownerOf(r), ClientID: req.ClientID, Name: req.Name,
@@ -92,8 +92,8 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) error {
 func (h *ProjectHandler) UpsertConversation(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	var req upsertConversationReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+		return err
 	}
 	c, err := h.svc.UpsertConversation(r.Context(), domainproject.UpsertConversationCommand{
 		OwnerID:      ownerOf(r),

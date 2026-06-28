@@ -23,6 +23,13 @@
     .sidebar .nav-link.active { background:#6366f1; color:#fff; box-shadow:0 6px 16px rgba(99,102,241,.4); }
     .nav-label { font-size:.7rem; text-transform:uppercase; letter-spacing:.08em;
       color:#5b6473; font-weight:700; padding:.5rem .8rem .3rem; }
+    /* 접이식 섹션 토글(슬라이드 메뉴) */
+    .nav-sec-toggle { display:flex; align-items:center; justify-content:space-between; width:100%;
+      background:none; border:0; color:#5b6473; font-size:.7rem; font-weight:700; text-transform:uppercase;
+      letter-spacing:.06em; padding:.7rem .8rem .35rem; cursor:pointer; }
+    .nav-sec-toggle:hover { color:var(--bs-secondary-color); }
+    .nav-sec-toggle .chev { font-size:.8rem; transition:transform .2s ease; }
+    .nav-sec-toggle.collapsed .chev { transform:rotate(-90deg); }
     .sidebar-foot { margin-top:auto; border-top:1px solid var(--bs-border-color); padding:.9rem 1rem;
       display:flex; align-items:center; gap:.65rem; }
     .avatar { width:38px; height:38px; border-radius:50%; flex:0 0 auto; color:#fff; font-weight:700;
@@ -115,28 +122,64 @@
         <span class="logo"><i class="bi bi-robot"></i></span>
         <span>OhMyAgent<br><small>Admin Console</small></span>
       </div>
-      <ul class="nav nav-pills flex-column p-2 mb-0">
-        <li class="nav-label">관리</li>
-        <li class="nav-item">
-          <a class="nav-link {{if eq .Active "dashboard"}}active{{end}}" href="/admin/"><i class="bi bi-grid-1x2"></i> 대시보드</a>
-        </li>
+      <nav class="nav nav-pills flex-column p-2 mb-0">
+        {{/* 개요 */}}
+        <a class="nav-link {{if eq .Active "dashboard"}}active{{end}}" href="/admin/"><i class="bi bi-grid-1x2"></i> 대시보드</a>
+
         {{if .CanManageMembers}}
-        <li class="nav-item">
-          <a class="nav-link {{if eq .Active "members"}}active{{end}}" href="/admin/members"><i class="bi bi-people"></i> 멤버</a>
-        </li>
+        {{/* 사용자 섹션 */}}
+        <button class="nav-sec-toggle{{if ne .Active "members"}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-users" aria-expanded="{{if eq .Active "members"}}true{{else}}false{{end}}">
+          <span><i class="bi bi-people-fill me-1"></i> 사용자</span><i class="bi bi-chevron-down chev"></i>
+        </button>
+        <div class="collapse{{if eq .Active "members"}} show{{end}}" id="sec-users">
+          <a class="nav-link {{if eq .Active "members"}}active{{end}}" href="/admin/members"><i class="bi bi-person-lines-fill"></i> 멤버</a>
+        </div>
         {{end}}
-        <li class="nav-item">
+
+        {{/* AI 섹션 */}}
+        <button class="nav-sec-toggle{{if ne .Active "providers"}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-ai" aria-expanded="{{if eq .Active "providers"}}true{{else}}false{{end}}">
+          <span><i class="bi bi-cpu me-1"></i> AI</span><i class="bi bi-chevron-down chev"></i>
+        </button>
+        <div class="collapse{{if eq .Active "providers"}} show{{end}}" id="sec-ai">
           <a class="nav-link {{if eq .Active "providers"}}active{{end}}" href="/admin/providers"><i class="bi bi-hdd-stack"></i> Provider</a>
-        </li>
+        </div>
+
         {{if .CanManage}}
-        <li class="nav-item">
+        {{/* 저장소 섹션 */}}
+        {{$store := or (eq .Active "transcripts") (eq .Active "sessions")}}
+        <button class="nav-sec-toggle{{if not $store}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-store" aria-expanded="{{if $store}}true{{else}}false{{end}}">
+          <span><i class="bi bi-database me-1"></i> 저장소</span><i class="bi bi-chevron-down chev"></i>
+        </button>
+        <div class="collapse{{if $store}} show{{end}}" id="sec-store">
           <a class="nav-link {{if eq .Active "transcripts"}}active{{end}}" href="/admin/transcripts"><i class="bi bi-clock-history"></i> 대화 이력</a>
-        </li>
-        <li class="nav-item">
           <a class="nav-link {{if eq .Active "sessions"}}active{{end}}" href="/admin/sessions"><i class="bi bi-folder2-open"></i> 세션 저장</a>
-        </li>
+        </div>
+
+        {{/* 채팅 섹션 */}}
+        <button class="nav-sec-toggle{{if ne .Active "chat"}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-chat" aria-expanded="{{if eq .Active "chat"}}true{{else}}false{{end}}">
+          <span><i class="bi bi-chat-dots me-1"></i> 채팅</span><i class="bi bi-chevron-down chev"></i>
+        </button>
+        <div class="collapse{{if eq .Active "chat"}} show{{end}}" id="sec-chat">
+          <a class="nav-link {{if eq .Active "chat"}}active{{end}}" href="/admin/chat"><i class="bi bi-chat-square-text"></i> 채팅 관리</a>
+        </div>
+
+        {{/* 보안·도구 섹션 */}}
+        <button class="nav-sec-toggle{{if ne .Active "tools"}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-security" aria-expanded="{{if eq .Active "tools"}}true{{else}}false{{end}}">
+          <span><i class="bi bi-shield-lock me-1"></i> 보안·도구</span><i class="bi bi-chevron-down chev"></i>
+        </button>
+        <div class="collapse{{if eq .Active "tools"}} show{{end}}" id="sec-security">
+          <a class="nav-link {{if eq .Active "tools"}}active{{end}}" href="/admin/tools"><i class="bi bi-hammer"></i> 도구 정책</a>
+        </div>
+
+        {{/* 클라이언트 섹션 */}}
+        <button class="nav-sec-toggle{{if ne .Active "client"}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-client" aria-expanded="{{if eq .Active "client"}}true{{else}}false{{end}}">
+          <span><i class="bi bi-app me-1"></i> 클라이언트</span><i class="bi bi-chevron-down chev"></i>
+        </button>
+        <div class="collapse{{if eq .Active "client"}} show{{end}}" id="sec-client">
+          <a class="nav-link {{if eq .Active "client"}}active{{end}}" href="/admin/client"><i class="bi bi-app-indicator"></i> 버전 점검</a>
+        </div>
         {{end}}
-      </ul>
+      </nav>
       <div class="sidebar-foot">
         <span class="avatar"><i class="bi bi-person-fill"></i></span>
         <div class="text-truncate flex-grow-1">

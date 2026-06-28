@@ -3,55 +3,32 @@ package httpin
 import (
 	"encoding/json"
 	"net/http"
+
+	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 )
 
-// ToolPolicyConfig 는 도구 정책 핸들러 주입값이다(config 에서 매핑).
-type ToolPolicyConfig struct {
-	Mode     string   // cached | realtime
-	Enabled  []string // nil = 전체 허용
-	Disabled []string
+// PolicyProvider 는 현재 도구/명령 정책 스냅샷을 제공한다(DB 백엔드 매니저가 atomic 캐시로 구현).
+// 핸들러는 요청마다 DB 를 치지 않고 이 무락 스냅샷을 읽는다.
+type PolicyProvider interface {
+	ToolPolicy() (mode string, enabled, disabled []string)
+	CommandPolicy() (patterns []domaintoolpolicy.BlockedPattern, paths []domaintoolpolicy.BlockedPath)
 }
 
-// ClientVersionConfig 는 버전 점검 핸들러 주입값이다(config 에서 매핑).
-type ClientVersionConfig struct {
-	Latest           string
-	MinimumSupported string
-	DownloadURL      string
-	Notice           string
-	Mandatory        bool
-}
-
-// CommandPolicyConfig 는 위험명령/경로 차단 정책 핸들러 주입값이다(config 에서 매핑).
-type CommandPolicyConfig struct {
-	BlockedPatterns []CommandBlockedPattern
-	BlockedPaths    []CommandBlockedPath
-}
-
-// CommandBlockedPattern 은 차단 명령 패턴 1건이다.
-type CommandBlockedPattern struct {
-	Type       string // regex | substring
-	Pattern    string
-	Reason     string
-	ScriptType string // any | powershell | cmd
-}
-
-// CommandBlockedPath 은 차단 경로 패턴 1건이다.
-type CommandBlockedPath struct {
-	Type    string // regex | substring
-	Pattern string
-	Reason  string
+// VersionProvider 는 현재 클라이언트 버전 정보를 제공한다(DB 백엔드 매니저가 atomic 캐시로 구현).
+type VersionProvider interface {
+	ClientVersion() (latest, minimumSupported, downloadURL, notice string, mandatory bool)
 }
 
 // ClientHandler 는 클라이언트 계약(도구 정책 / 버전 점검 / 명령 보안) 핸들러다(중첩 envelope).
+// 도구·명령 정책과 버전 정보 모두 DB 백엔드(PolicyProvider/VersionProvider)에서 온다.
 type ClientHandler struct {
-	policy    ToolPolicyConfig
-	version   ClientVersionConfig
-	cmdPolicy CommandPolicyConfig
+	version VersionProvider
+	policy  PolicyProvider
 }
 
 // NewClientHandler 는 ClientHandler 를 생성한다.
-func NewClientHandler(policy ToolPolicyConfig, version ClientVersionConfig, cmdPolicy CommandPolicyConfig) *ClientHandler {
-	return &ClientHandler{policy: policy, version: version, cmdPolicy: cmdPolicy}
+func NewClientHandler(version VersionProvider, policy PolicyProvider) *ClientHandler {
+	return &ClientHandler{version: version, policy: policy}
 }
 
 // --- GET /api/v1/tools/policy (로그인 시 1회) ---
@@ -64,11 +41,11 @@ type toolPolicyResp struct {
 
 // ToolsPolicy 는 세션 도구 정책(모드 + cached 목록)을 반환한다.
 func (h *ClientHandler) ToolsPolicy(w http.ResponseWriter, r *http.Request) error {
-	mode := h.policy.Mode
+	mode, enabled, disabled := h.policy.ToolPolicy()
 	if mode != "realtime" {
 		mode = "cached" // 그 외 값은 cached 로 간주(스펙)
 	}
-	writeJSON(w, http.StatusOK, toolPolicyResp{Mode: mode, Enabled: h.policy.Enabled, Disabled: h.policy.Disabled})
+	writeJSON(w, http.StatusOK, toolPolicyResp{Mode: mode, Enabled: enabled, Disabled: disabled})
 	return nil
 }
 
@@ -88,8 +65,8 @@ type toolAuthorizeResp struct {
 func (h *ClientHandler) ToolsAuthorize(w http.ResponseWriter, r *http.Request) error {
 	defer func() { _ = r.Body.Close() }()
 	var req toolAuthorizeReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return ErrBadRequest("invalid request body")
+	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+		return err
 	}
 	if req.Tool == "" {
 		return ErrBadRequest("tool is required")
@@ -100,14 +77,15 @@ func (h *ClientHandler) ToolsAuthorize(w http.ResponseWriter, r *http.Request) e
 }
 
 func (h *ClientHandler) authorize(tool string) (bool, *string) {
-	for _, d := range h.policy.Disabled {
+	_, enabled, disabled := h.policy.ToolPolicy()
+	for _, d := range disabled {
 		if d == tool {
 			reason := "서버 정책에 의해 차단된 도구입니다"
 			return false, &reason
 		}
 	}
-	if len(h.policy.Enabled) > 0 {
-		for _, e := range h.policy.Enabled {
+	if len(enabled) > 0 {
+		for _, e := range enabled {
 			if e == tool {
 				return true, nil
 			}
@@ -130,12 +108,13 @@ type clientVersionResp struct {
 
 // ClientVersion 은 최신/최소지원 클라 버전 정보를 반환한다.
 func (h *ClientHandler) ClientVersion(w http.ResponseWriter, r *http.Request) error {
+	latest, minimum, url, notice, mandatory := h.version.ClientVersion()
 	writeJSON(w, http.StatusOK, clientVersionResp{
-		Latest:           h.version.Latest,
-		MinimumSupported: h.version.MinimumSupported,
-		DownloadURL:      h.version.DownloadURL,
-		Notice:           h.version.Notice,
-		Mandatory:        h.version.Mandatory,
+		Latest:           latest,
+		MinimumSupported: minimum,
+		DownloadURL:      url,
+		Notice:           notice,
+		Mandatory:        mandatory,
 	})
 	return nil
 }
@@ -161,43 +140,20 @@ type commandPolicyResp struct {
 }
 
 // CommandPolicy 는 서버 추가 위험명령/경로 차단 패턴을 반환한다("2중 안전": 추가만, 디폴트 해제 불가).
-// 빈 패턴은 건너뛰고, type/script_type 은 안전 기본값으로 정규화한다(생략=substring/any).
+// 값은 도메인에서 정규화·빈 항목 제거되어 캐시되므로 그대로 매핑한다.
 func (h *ClientHandler) CommandPolicy(w http.ResponseWriter, r *http.Request) error {
+	patterns, paths := h.policy.CommandPolicy()
 	out := commandPolicyResp{BlockedPatterns: []commandPatternResp{}, BlockedPaths: []commandPathResp{}}
-	for _, p := range h.cmdPolicy.BlockedPatterns {
-		if p.Pattern == "" {
-			continue
-		}
+	for _, p := range patterns {
 		out.BlockedPatterns = append(out.BlockedPatterns, commandPatternResp{
-			Type: normMatchType(p.Type), Pattern: p.Pattern, Reason: p.Reason, ScriptType: normScriptType(p.ScriptType),
+			Type: p.Type, Pattern: p.Pattern, Reason: p.Reason, ScriptType: p.ScriptType,
 		})
 	}
-	for _, p := range h.cmdPolicy.BlockedPaths {
-		if p.Pattern == "" {
-			continue
-		}
+	for _, p := range paths {
 		out.BlockedPaths = append(out.BlockedPaths, commandPathResp{
-			Type: normMatchType(p.Type), Pattern: p.Pattern, Reason: p.Reason,
+			Type: p.Type, Pattern: p.Pattern, Reason: p.Reason,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
 	return nil
-}
-
-// normMatchType 은 매칭 방식을 정규화한다(regex 만 그대로, 그 외=substring 안전 기본).
-func normMatchType(t string) string {
-	if t == "regex" {
-		return "regex"
-	}
-	return "substring"
-}
-
-// normScriptType 은 적용 셸을 정규화한다(powershell|cmd 만 그대로, 그 외=any).
-func normScriptType(s string) string {
-	switch s {
-	case "powershell", "cmd":
-		return s
-	default:
-		return "any"
-	}
 }
