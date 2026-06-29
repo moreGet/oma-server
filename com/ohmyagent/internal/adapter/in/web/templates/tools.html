@@ -1,6 +1,6 @@
 {{define "content"}}
 {{if .CanManage}}
-<div class="card" style="max-width:50rem">
+<div class="card" style="max-width:64rem">
   <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
     <span class="fw-semibold"><i class="bi bi-hammer me-1"></i> 도구 정책</span>
     {{if .Data.UpdatedAt}}<small class="text-secondary">최종 수정 {{.Data.UpdatedAt}} (KST){{if .Data.UpdatedBy}} · {{.Data.UpdatedBy}}{{end}}</small>{{end}}
@@ -19,18 +19,50 @@
         </div>
       </div>
 
-      {{/* 노출/실행 도구 */}}
-      <div class="row g-3">
-        <div class="col-md-6">
-          <label class="form-label small text-secondary mb-1">허용 도구 (한 줄에 하나)</label>
-          <textarea name="enabled" class="form-control font-monospace" rows="5" placeholder="비우면 전체 허용&#10;read_file&#10;write_file&#10;grep">{{.Data.Enabled}}</textarea>
-          <div class="form-text">비우면 전체 허용(화이트리스트 아님). 지정 시 목록 외 도구는 노출·실행 차단.</div>
+      {{/* 노출/실행 도구 — 카탈로그 칩(기본/허용/차단) */}}
+      <div>
+        <label class="form-label small text-secondary mb-1">노출·실행 도구</label>
+        <div class="form-text mb-2">
+          <span class="badge bg-secondary">기본</span> 목록 미지정(전체 허용) ·
+          <span class="badge bg-success">허용</span> 화이트리스트 ·
+          <span class="badge bg-danger">차단</span> 항상 차단(허용보다 우선).
+          허용을 하나도 고르지 않으면 전체 허용입니다.
         </div>
-        <div class="col-md-6">
-          <label class="form-label small text-secondary mb-1">차단 도구 (한 줄에 하나)</label>
-          <textarea name="disabled" class="form-control font-monospace" rows="5" placeholder="kill_process&#10;screenshot">{{.Data.Disabled}}</textarea>
-          <div class="form-text">허용 목록보다 우선. 여기 있는 도구는 항상 차단.</div>
+        {{range .Data.Categories}}
+        <div class="mb-3">
+          <div class="small text-secondary fw-semibold mb-1">{{.Category}}</div>
+          <div class="d-flex flex-wrap gap-2">
+            {{range .Tools}}
+            <div class="d-inline-flex align-items-center border rounded px-2 py-1 gap-2">
+              <code class="small text-body">{{.Name}}</code>
+              <div class="btn-group btn-group-sm" role="group" aria-label="{{.Name}} 상태">
+                <input type="radio" class="btn-check" name="t_{{.Name}}" id="t_{{.Name}}_d" value="default" autocomplete="off" {{if eq .State "default"}}checked{{end}}>
+                <label class="btn btn-outline-secondary py-0 px-2" for="t_{{.Name}}_d">기본</label>
+                <input type="radio" class="btn-check" name="t_{{.Name}}" id="t_{{.Name}}_e" value="enabled" autocomplete="off" {{if eq .State "enabled"}}checked{{end}}>
+                <label class="btn btn-outline-success py-0 px-2" for="t_{{.Name}}_e">허용</label>
+                <input type="radio" class="btn-check" name="t_{{.Name}}" id="t_{{.Name}}_x" value="disabled" autocomplete="off" {{if eq .State "disabled"}}checked{{end}}>
+                <label class="btn btn-outline-danger py-0 px-2" for="t_{{.Name}}_x">차단</label>
+              </div>
+            </div>
+            {{end}}
+          </div>
         </div>
+        {{end}}
+
+        {{/* 카탈로그 외(레거시/커스텀) 도구 — 수동 입력으로 보존 */}}
+        <details {{if or .Data.UnknownEnabled .Data.UnknownDisabled}}open{{end}}>
+          <summary class="small text-secondary">기타(카탈로그 외) 도구 — 수동 입력</summary>
+          <div class="row g-3 mt-1">
+            <div class="col-md-6">
+              <label class="form-label small text-secondary mb-1">허용 (한 줄에 하나)</label>
+              <textarea name="enabled_extra" class="form-control font-monospace" rows="3" placeholder="카탈로그에 없는 도구명">{{.Data.UnknownEnabled}}</textarea>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small text-secondary mb-1">차단 (한 줄에 하나)</label>
+              <textarea name="disabled_extra" class="form-control font-monospace" rows="3" placeholder="카탈로그에 없는 도구명">{{.Data.UnknownDisabled}}</textarea>
+            </div>
+          </div>
+        </details>
       </div>
 
       <hr class="my-1">

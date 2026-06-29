@@ -794,16 +794,30 @@ func humanBytes(n int64) string {
 
 // --- 도구 정책(/admin/tools) ---
 
+// toolChipView 는 카탈로그 도구 1개의 칩 상태다(State: default|enabled|disabled).
+type toolChipView struct {
+	Name  string
+	State string
+}
+
+// toolCategoryView 는 카테고리별 도구 칩 묶음이다(노출 순서 보존).
+type toolCategoryView struct {
+	Category string
+	Tools    []toolChipView
+}
+
 // toolPolicyView 는 도구 정책 편집 화면 데이터다.
-// enabled/disabled 는 줄바꿈 목록, 차단 패턴/경로는 JSON 텍스트로 편집한다.
+// 도구 허용/차단은 카탈로그 기반 칩(Categories)으로 편집하고,
+// 카탈로그에 없는 도구는 Unknown* 텍스트로 보존·수동 편집한다.
 type toolPolicyView struct {
-	Mode         string
-	Enabled      string // 줄바꿈 구분 도구명
-	Disabled     string
-	PatternsJSON string // [{type,pattern,reason,script_type}]
-	PathsJSON    string // [{type,pattern,reason}]
-	UpdatedAt    string // KST, 비어있으면 미저장
-	UpdatedBy    string
+	Mode            string
+	Categories      []toolCategoryView // 카탈로그 칩(카테고리별)
+	UnknownEnabled  string             // 카탈로그 외 허용 도구(줄바꿈)
+	UnknownDisabled string             // 카탈로그 외 차단 도구(줄바꿈)
+	PatternsJSON    string             // [{type,pattern,reason,script_type}]
+	PathsJSON       string             // [{type,pattern,reason}]
+	UpdatedAt       string             // KST, 비어있으면 미저장
+	UpdatedBy       string
 }
 
 func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
@@ -814,16 +828,64 @@ func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, basePath+"/")
 		return
 	}
-	pd.Data = toolPolicyView{
-		Mode:         st.Mode,
-		Enabled:      strings.Join(st.Enabled, "\n"),
-		Disabled:     strings.Join(st.Disabled, "\n"),
-		PatternsJSON: marshalIndent(st.BlockedPatterns),
-		PathsJSON:    marshalIndent(st.BlockedPaths),
-		UpdatedAt:    fmtUnixKST(st.UpdatedAt),
-		UpdatedBy:    st.UpdatedBy,
-	}
+	pd.Data = buildToolPolicyView(st)
 	s.render(w, "tools", pd)
+}
+
+// buildToolPolicyView 는 정책 스냅샷을 칩 편집 화면 데이터로 변환한다.
+// 도구 상태는 차단 우선(authorize 로직과 동일): disabled > enabled > default.
+func buildToolPolicyView(st domaintoolpolicy.Settings) toolPolicyView {
+	enabledSet := toStringSet(st.Enabled)
+	disabledSet := toStringSet(st.Disabled)
+
+	var cats []toolCategoryView
+	idx := make(map[string]int)
+	for _, t := range domaintoolpolicy.ClientTools {
+		state := "default"
+		if _, ok := disabledSet[t.Name]; ok {
+			state = "disabled"
+		} else if _, ok := enabledSet[t.Name]; ok {
+			state = "enabled"
+		}
+		i, ok := idx[t.Category]
+		if !ok {
+			i = len(cats)
+			idx[t.Category] = i
+			cats = append(cats, toolCategoryView{Category: t.Category})
+		}
+		cats[i].Tools = append(cats[i].Tools, toolChipView{Name: t.Name, State: state})
+	}
+
+	return toolPolicyView{
+		Mode:            st.Mode,
+		Categories:      cats,
+		UnknownEnabled:  strings.Join(unknownTools(st.Enabled), "\n"),
+		UnknownDisabled: strings.Join(unknownTools(st.Disabled), "\n"),
+		PatternsJSON:    marshalIndent(st.BlockedPatterns),
+		PathsJSON:       marshalIndent(st.BlockedPaths),
+		UpdatedAt:       fmtUnixKST(st.UpdatedAt),
+		UpdatedBy:       st.UpdatedBy,
+	}
+}
+
+// toStringSet 은 슬라이스를 조회용 set 으로 만든다.
+func toStringSet(in []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(in))
+	for _, v := range in {
+		out[v] = struct{}{}
+	}
+	return out
+}
+
+// unknownTools 는 카탈로그에 없는(레거시/커스텀) 도구명만 추린다.
+func unknownTools(in []string) []string {
+	var out []string
+	for _, n := range in {
+		if !domaintoolpolicy.IsKnownTool(n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
@@ -835,12 +897,27 @@ func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, basePath+"/tools")
 		return
 	}
+
+	// 카탈로그 칩 상태(t_<name>=default|enabled|disabled) → enabled/disabled 재구성.
+	var enabled, disabled []string
+	for _, t := range domaintoolpolicy.ClientTools {
+		switch r.FormValue("t_" + t.Name) {
+		case "enabled":
+			enabled = append(enabled, t.Name)
+		case "disabled":
+			disabled = append(disabled, t.Name)
+		}
+	}
+	// 카탈로그 외 도구는 수동 입력으로 보존.
+	enabled = append(enabled, splitLines(r.FormValue("enabled_extra"))...)
+	disabled = append(disabled, splitLines(r.FormValue("disabled_extra"))...)
+
 	err := s.toolPolicy.UpdateSettings(r.Context(), domaintoolpolicy.UpdateCommand{
 		ActorID: actorID(r),
 		Settings: domaintoolpolicy.Settings{
 			Mode:            r.FormValue("mode"),
-			Enabled:         splitLines(r.FormValue("enabled")),
-			Disabled:        splitLines(r.FormValue("disabled")),
+			Enabled:         enabled,
+			Disabled:        disabled,
 			BlockedPatterns: patterns,
 			BlockedPaths:    paths,
 		},
