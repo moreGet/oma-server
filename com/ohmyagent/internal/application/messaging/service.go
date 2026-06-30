@@ -19,6 +19,7 @@ type Service struct {
 	rooms       domainmessaging.RoomRepository
 	messages    domainmessaging.MessageRepository
 	attachments domainmessaging.AttachmentStore
+	directory   domainmessaging.MemberDirectory
 	hub         *Hub
 	bc          Broadcaster
 	now         func() time.Time
@@ -26,15 +27,31 @@ type Service struct {
 }
 
 // NewService 는 Service 를 생성한다. bc 가 nil 이면 단일 인스턴스(LocalBroadcaster)로 기본 동작한다.
+// 멤버 이름 디렉터리는 기본 no-op(이름 미해석)이며, 조립 루트가 SetMemberDirectory 로 주입한다.
 func NewService(rooms domainmessaging.RoomRepository, messages domainmessaging.MessageRepository, attachments domainmessaging.AttachmentStore, hub *Hub, bc Broadcaster) *Service {
 	if bc == nil {
 		bc = NewLocalBroadcaster(hub)
 	}
 	return &Service{
 		rooms: rooms, messages: messages, attachments: attachments, hub: hub, bc: bc,
-		now:   time.Now,
-		newID: func() string { return uuid.NewString() },
+		directory: noopMemberDirectory{},
+		now:       time.Now,
+		newID:     func() string { return uuid.NewString() },
 	}
+}
+
+// SetMemberDirectory 는 멤버 이름 해석 디렉터리를 주입한다(조립 루트 전용, 기동 시 1회).
+func (s *Service) SetMemberDirectory(d domainmessaging.MemberDirectory) {
+	if d != nil {
+		s.directory = d
+	}
+}
+
+// noopMemberDirectory 는 이름을 해석하지 않는 기본 구현이다(디렉터리 미주입 시 폴백).
+type noopMemberDirectory struct{}
+
+func (noopMemberDirectory) NamesByIDs(context.Context, []string) (map[string]domainmessaging.MemberInfo, error) {
+	return map[string]domainmessaging.MemberInfo{}, nil
 }
 
 // CreateGroup 은 단체 방을 만든다(생성자 포함, 멤버 중복 제거). name 필수.
@@ -465,6 +482,31 @@ func (s *Service) RoomMembers(ctx context.Context, actorID, roomID string) ([]st
 		return nil, err
 	}
 	return s.rooms.Members(ctx, roomID)
+}
+
+// RoomMembersDetail 은 방 멤버를 이름(username/display_name) 포함으로 반환한다(멤버십 스코프).
+// 디렉터리에서 해석되지 않는 id 는 이름 없이(ID 만) 포함해 클라가 UUID 폴백할 수 있게 한다.
+func (s *Service) RoomMembersDetail(ctx context.Context, actorID, roomID string) ([]domainmessaging.MemberInfo, error) {
+	if err := s.requireMember(ctx, roomID, actorID); err != nil {
+		return nil, err
+	}
+	ids, err := s.rooms.Members(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	names, err := s.directory.NamesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domainmessaging.MemberInfo, 0, len(ids))
+	for _, id := range ids {
+		if mi, ok := names[id]; ok {
+			out = append(out, mi)
+		} else {
+			out = append(out, domainmessaging.MemberInfo{ID: id})
+		}
+	}
+	return out, nil
 }
 
 // AddMembers 는 단체 방에 멤버를 추가한다(멤버만, group 한정). 추가 후 전체 멤버 목록을 반환하고

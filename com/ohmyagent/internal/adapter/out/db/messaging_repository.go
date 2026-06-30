@@ -42,12 +42,19 @@ func (r *MessagingRepository) Create(ctx context.Context, room domainmessaging.R
 	); err != nil {
 		return fmt.Errorf("messaging: insert room: %w", err)
 	}
-	for _, mid := range memberIDs {
+	if len(memberIDs) > 0 {
+		// 멤버 1건씩 N회 INSERT 대신 멀티로우 1쿼리(sqlite 단일 writer 에서 왕복 절감).
+		rows := make([]string, 0, len(memberIDs))
+		args := make([]any, 0, len(memberIDs)*3)
+		for _, mid := range memberIDs {
+			rows = append(rows, "(?,?,?)")
+			args = append(args, room.ID, mid, room.CreatedAt)
+		}
 		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO chat_room_members (room_id, member_id, joined_at) VALUES (?,?,?)",
-			room.ID, mid, room.CreatedAt,
+			"INSERT INTO chat_room_members (room_id, member_id, joined_at) VALUES "+strings.Join(rows, ","),
+			args...,
 		); err != nil {
-			return fmt.Errorf("messaging: insert member: %w", err)
+			return fmt.Errorf("messaging: insert members: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -275,16 +282,24 @@ func (r *MessagingRepository) ReadStates(ctx context.Context, roomID string) ([]
 
 // AddMembers 는 멤버를 방에 추가한다(이미 멤버면 무시). last_read_at 은 joinedAt 으로 시작(가입 전 메시지 안읽음 제외).
 func (r *MessagingRepository) AddMembers(ctx context.Context, roomID string, memberIDs []string, joinedAt int64) error {
+	if len(memberIDs) == 0 {
+		return nil
+	}
 	tail := " ON CONFLICT(room_id, member_id) DO NOTHING" // sqlite
 	verb := "INSERT INTO"
 	if r.driver == "mysql" {
 		verb, tail = "INSERT IGNORE INTO", ""
 	}
-	q := verb + " chat_room_members (room_id, member_id, joined_at, last_read_at) VALUES (?,?,?,?)" + tail
+	// 멤버 1건씩 N회 INSERT 대신 멀티로우 1쿼리(왕복 절감).
+	rows := make([]string, 0, len(memberIDs))
+	args := make([]any, 0, len(memberIDs)*4)
 	for _, mid := range memberIDs {
-		if _, err := r.db.ExecContext(ctx, q, roomID, mid, joinedAt, joinedAt); err != nil {
-			return fmt.Errorf("messaging: add member: %w", err)
-		}
+		rows = append(rows, "(?,?,?,?)")
+		args = append(args, roomID, mid, joinedAt, joinedAt)
+	}
+	q := verb + " chat_room_members (room_id, member_id, joined_at, last_read_at) VALUES " + strings.Join(rows, ",") + tail
+	if _, err := r.db.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("messaging: add members: %w", err)
 	}
 	return nil
 }

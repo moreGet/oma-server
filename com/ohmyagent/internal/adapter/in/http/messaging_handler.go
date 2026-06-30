@@ -29,6 +29,7 @@ type messagingService interface {
 	ReadStates(ctx context.Context, actorID, roomID string) ([]domainmessaging.ReadState, error)
 	Typing(ctx context.Context, actorID, roomID, state string) error
 	RoomMembers(ctx context.Context, actorID, roomID string) ([]string, error)
+	RoomMembersDetail(ctx context.Context, actorID, roomID string) ([]domainmessaging.MemberInfo, error)
 	AddMembers(ctx context.Context, actorID, roomID string, memberIDs []string) ([]string, error)
 	LeaveRoom(ctx context.Context, actorID, roomID string) error
 	KickMember(ctx context.Context, actorID, roomID, targetID string) error
@@ -124,6 +125,17 @@ type readStatesResp struct {
 
 type membersResp struct {
 	Members []string `json:"members"`
+}
+
+// memberDetailDTO 는 ?detail=1 응답의 멤버 항목이다(UUID + 사람이 읽는 이름).
+type memberDetailDTO struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+type membersDetailResp struct {
+	Members []memberDetailDTO `json:"members"`
 }
 
 type addMembersReq struct {
@@ -304,7 +316,23 @@ func (h *MessagingHandler) DeleteMessage(w http.ResponseWriter, r *http.Request)
 // RoomMembers 는 GET /api/v1/chat/rooms/{id}/members — 방 멤버 목록.
 func (h *MessagingHandler) RoomMembers(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
-	members, err := h.svc.RoomMembers(r.Context(), claims.MemberID, r.PathValue("id"))
+	roomID := r.PathValue("id")
+
+	// ?detail=1 → 이름(username/display_name) 포함(방 멤버 누구나). 무인자는 기존 UUID 배열(하위호환).
+	if r.URL.Query().Get("detail") == "1" {
+		infos, err := h.svc.RoomMembersDetail(r.Context(), claims.MemberID, roomID)
+		if err != nil {
+			return messagingErr(err)
+		}
+		out := make([]memberDetailDTO, 0, len(infos))
+		for _, mi := range infos {
+			out = append(out, memberDetailDTO{ID: mi.ID, Username: mi.Username, DisplayName: mi.DisplayName})
+		}
+		writeJSON(w, http.StatusOK, membersDetailResp{Members: out})
+		return nil
+	}
+
+	members, err := h.svc.RoomMembers(r.Context(), claims.MemberID, roomID)
 	if err != nil {
 		return messagingErr(err)
 	}

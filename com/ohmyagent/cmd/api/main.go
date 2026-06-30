@@ -157,6 +157,7 @@ func run() error {
 	defer func() { _ = messagingBroadcaster.Close() }()
 	messagingRepo := dbout.NewMessagingRepository(conn, cfg.Database.Driver)
 	messagingService := messagingapp.NewService(messagingRepo, messagingRepo, dbout.NewChatAttachmentStore(conn), messagingHub, messagingBroadcaster)
+	messagingService.SetMemberDirectory(dbout.NewMemberDirectoryRepository(conn)) // 채팅 멤버 이름 해석(UUID→username/display_name)
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
 	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
 	agentUC := agentapp.NewAgentService(providerUC) // 에이전트 루프(tools/function-calling) 중계

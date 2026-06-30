@@ -153,6 +153,21 @@ type RoomRepository interface {
 	DeleteRoom(ctx context.Context, roomID string) error
 }
 
+// MemberInfo 는 채팅 표시용 멤버 이름 정보다(UUID → 사람이 읽는 이름 해석 결과).
+// DisplayName 이 비면 클라이언트가 Username 으로 폴백한다(둘 중 하나는 채워진다).
+type MemberInfo struct {
+	ID          string
+	Username    string
+	DisplayName string
+}
+
+// MemberDirectory — out 포트(멤버 ID → 표시 이름 해석). auth 도메인 직접 의존을 피하기 위한 경계.
+// 채팅 멤버 이름 표시(멤버 목록/멘션/1:1 상대)에 사용한다. 멤버십 스코프는 호출하는 유스케이스가 보장한다.
+type MemberDirectory interface {
+	// NamesByIDs 는 주어진 멤버 ID 들의 이름 정보를 id→MemberInfo 맵으로 반환한다(없는 id 는 제외).
+	NamesByIDs(ctx context.Context, ids []string) (map[string]MemberInfo, error)
+}
+
 // MessageRepository — 메시지 영속화 포트(향후 NoSQL 등으로 교체 가능한 경계).
 type MessageRepository interface {
 	// Save 는 메시지를 저장한다.

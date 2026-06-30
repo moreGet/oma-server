@@ -620,6 +620,49 @@ func TestService_Kick(t *testing.T) {
 	assert.Equal(t, "u3", ev.Member.MemberID)
 }
 
+// fakeDirectory 는 멤버 이름 해석 테스트 더블이다.
+type fakeDirectory struct {
+	names map[string]domainmessaging.MemberInfo
+}
+
+func (d fakeDirectory) NamesByIDs(_ context.Context, ids []string) (map[string]domainmessaging.MemberInfo, error) {
+	out := make(map[string]domainmessaging.MemberInfo, len(ids))
+	for _, id := range ids {
+		if mi, ok := d.names[id]; ok {
+			out[id] = mi
+		}
+	}
+	return out, nil
+}
+
+func TestService_RoomMembersDetail(t *testing.T) {
+	repo := newFakeRepo()
+	s := NewService(repo, repo, newAttStore(), NewHub(), nil)
+	s.SetMemberDirectory(fakeDirectory{names: map[string]domainmessaging.MemberInfo{
+		"u1": {ID: "u1", Username: "admin", DisplayName: "신성현"},
+		"u2": {ID: "u2", Username: "probe2"}, // display_name 없음 → 클라가 username 폴백
+	}})
+	ctx := context.Background()
+	room, _ := s.CreateGroup(ctx, "u1", "team", []string{"u2", "u3"}) // u3 은 디렉터리에 없음
+
+	// 비멤버는 403(멤버십 스코프).
+	_, err := s.RoomMembersDetail(ctx, "ghost", room.ID)
+	assert.ErrorIs(t, err, domainmessaging.ErrNotMember)
+
+	infos, err := s.RoomMembersDetail(ctx, "u1", room.ID)
+	require.NoError(t, err)
+	byID := make(map[string]domainmessaging.MemberInfo, len(infos))
+	for _, mi := range infos {
+		byID[mi.ID] = mi
+	}
+	assert.Equal(t, "admin", byID["u1"].Username)
+	assert.Equal(t, "신성현", byID["u1"].DisplayName)
+	assert.Equal(t, "probe2", byID["u2"].Username)
+	assert.Empty(t, byID["u2"].DisplayName)
+	// 디렉터리 미해석 멤버는 ID 만(클라 UUID 폴백).
+	assert.Equal(t, domainmessaging.MemberInfo{ID: "u3"}, byID["u3"])
+}
+
 func TestService_MentionsAndAttachments(t *testing.T) {
 	repo := newFakeRepo()
 	s := NewService(repo, repo, newAttStore(), NewHub(), nil)

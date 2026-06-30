@@ -421,7 +421,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 | `POST /api/v1/chat/rooms/{id}/read` | 방을 **지금까지 읽음 처리** → `{room_id,last_read_at}`(200). 읽음 위치는 **단조 증가**(뒤로 안 감) + 방 멤버에게 WS `read` 이벤트 브로드캐스트 |
 | `GET /api/v1/chat/rooms/{id}/reads` | 멤버별 **읽음 위치**(읽음 표시 렌더용) `{reads:[{member_id,last_read_at}]}`. 메시지는 `member.last_read_at >= message.created_at` 이면 그 멤버가 읽은 것 |
 | `GET /api/v1/chat/unread` | 총/방별 안읽음 배지 `{total, rooms:{<roomId>:<count>}}` (count>0 만 포함) |
-| `GET /api/v1/chat/rooms/{id}/members` | 방 멤버 목록 `{members:[<memberId>]}` |
+| `GET /api/v1/chat/rooms/{id}/members` | 방 멤버 목록. 기본 `{members:[<memberId>]}`(UUID 배열). **`?detail=1`** 시 이름 포함 `{members:[{id,username,display_name?}]}`(방 멤버라면 누구나, admin 불필요). `display_name` 빈 값이면 생략 → 클라가 `username` 폴백. 디렉터리에 없는 id 는 `id` 만 채워 반환(UUID 폴백) |
 | `POST /api/v1/chat/rooms/{id}/members` | **단체 방에 멤버 추가** `{member_ids[]}` → 갱신된 `{members[]}`(200). **group 한정**(1:1 → 400), 멤버만, 이미 멤버는 무시. 추가 멤버는 가입 시점부터 안읽음 카운트(이전 메시지 제외) |
 | `DELETE /api/v1/chat/rooms/{id}/members/{mid}` | **강퇴**(204) — **방 생성자(creator)만**, group 한정. 본인 강퇴 400(→leave), 비멤버 대상 403, 비생성자 403. 강퇴 대상 포함 멤버에게 `member_left` 브로드캐스트 |
 | `POST /api/v1/chat/rooms/{id}/leave` | **본인이 방에서 나가기**(204). **group 한정**(1:1 → 400) |
