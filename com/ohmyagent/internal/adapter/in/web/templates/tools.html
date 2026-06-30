@@ -19,50 +19,11 @@
         </div>
       </div>
 
-      {{/* 노출/실행 도구 — 카탈로그 칩(기본/허용/차단) */}}
+      {{/* 노출/실행 도구 — 카테고리별 리스트(전역 정책) */}}
       <div>
-        <label class="form-label small text-secondary mb-1">노출·실행 도구</label>
-        <div class="form-text mb-2">
-          <span class="badge bg-secondary">기본</span> 목록 미지정(전체 허용) ·
-          <span class="badge bg-success">허용</span> 화이트리스트 ·
-          <span class="badge bg-danger">차단</span> 항상 차단(허용보다 우선).
-          허용을 하나도 고르지 않으면 전체 허용입니다.
-        </div>
-        {{range .Data.Categories}}
-        <div class="mb-3">
-          <div class="small text-secondary fw-semibold mb-1">{{.Category}}</div>
-          <div class="d-flex flex-wrap gap-2">
-            {{range .Tools}}
-            <div class="d-inline-flex align-items-center border rounded px-2 py-1 gap-2">
-              <code class="small text-body">{{.Name}}</code>
-              <div class="btn-group btn-group-sm" role="group" aria-label="{{.Name}} 상태">
-                <input type="radio" class="btn-check" name="t_{{.Name}}" id="t_{{.Name}}_d" value="default" autocomplete="off" {{if eq .State "default"}}checked{{end}}>
-                <label class="btn btn-outline-secondary py-0 px-2" for="t_{{.Name}}_d">기본</label>
-                <input type="radio" class="btn-check" name="t_{{.Name}}" id="t_{{.Name}}_e" value="enabled" autocomplete="off" {{if eq .State "enabled"}}checked{{end}}>
-                <label class="btn btn-outline-success py-0 px-2" for="t_{{.Name}}_e">허용</label>
-                <input type="radio" class="btn-check" name="t_{{.Name}}" id="t_{{.Name}}_x" value="disabled" autocomplete="off" {{if eq .State "disabled"}}checked{{end}}>
-                <label class="btn btn-outline-danger py-0 px-2" for="t_{{.Name}}_x">차단</label>
-              </div>
-            </div>
-            {{end}}
-          </div>
-        </div>
-        {{end}}
-
-        {{/* 카탈로그 외(레거시/커스텀) 도구 — 수동 입력으로 보존 */}}
-        <details {{if or .Data.UnknownEnabled .Data.UnknownDisabled}}open{{end}}>
-          <summary class="small text-secondary">기타(카탈로그 외) 도구 — 수동 입력</summary>
-          <div class="row g-3 mt-1">
-            <div class="col-md-6">
-              <label class="form-label small text-secondary mb-1">허용 (한 줄에 하나)</label>
-              <textarea name="enabled_extra" class="form-control font-monospace" rows="3" placeholder="카탈로그에 없는 도구명">{{.Data.UnknownEnabled}}</textarea>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label small text-secondary mb-1">차단 (한 줄에 하나)</label>
-              <textarea name="disabled_extra" class="form-control font-monospace" rows="3" placeholder="카탈로그에 없는 도구명">{{.Data.UnknownDisabled}}</textarea>
-            </div>
-          </div>
-        </details>
+        <label class="form-label small text-secondary mb-1">노출·실행 도구 <span class="text-secondary">(전역)</span></label>
+        <div class="form-text mb-1">허용을 하나도 고르지 않으면 전체 허용입니다. 멤버별 추가 제한은 멤버 관리에서 설정합니다.</div>
+        {{template "toolEditor" .Data}}
       </div>
 
       <hr class="my-1">

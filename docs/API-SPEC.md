@@ -74,7 +74,19 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 | `PUT /api/v1/members/{id}/role` | admin |
 | `PUT /api/v1/members/{id}/active` | admin |
 | `PUT /api/v1/members/{id}/password` | admin (하위 멤버 비번 리셋, CanControl) |
+| `GET /api/v1/members/{id}/tool-policy` | admin (멤버 도구 정책 오버라이드 조회) |
+| `PUT /api/v1/members/{id}/tool-policy` | admin (멤버 도구 정책 오버라이드 설정) |
 | `DELETE /api/v1/members/{id}` | super_admin |
+
+#### 멤버별 도구 정책 오버라이드 (admin, 평면 envelope)
+전역 도구 정책에 **계층 병합**되는 멤버 단위 허용/차단 오버라이드다(모드는 전역 전용이라 멤버는 오버라이드 불가).
+- `GET /api/v1/members/{id}/tool-policy` → `{member_id, enabled, disabled, updated_at?, updated_by?}`. 오버라이드 없으면 `enabled`/`disabled` 가 `null`.
+- `PUT /api/v1/members/{id}/tool-policy` body `{enabled?:[도구명], disabled?:[도구명]}` → 갱신된 정책(200). **빈 배열/생략 = 오버라이드 해제**(전역만 적용).
+
+**유효 정책 합성(전역 ⊕ 멤버, "전역=보안 하한")** — `GET /api/v1/tools/policy`·`POST /api/v1/tools/authorize` 가 반환·적용하는 실제 정책:
+- `mode` = 전역값(멤버 무관).
+- `disabled` = **전역 ∪ 멤버**(합집합) — 전역 차단은 항상 적용되고 멤버는 차단을 **추가만** 가능(전역이 막은 도구를 멤버가 다시 열 수 없음).
+- `enabled`(화이트리스트) = 둘 다 비면 전체 허용 / 한쪽만 지정 시 그 목록 / **둘 다 지정 시 교집합**(멤버는 허용 범위를 좁히기만 가능).
 
 멤버 프로필 필드(선택): `POST /api/v1/members` 는 `email`·`display_name`·`organization` 을 함께 받을 수 있고, 멤버 응답에도 포함된다(미설정 시 빈 값). 어드민 웹·`GET /api/v1/users/me` 에서 노출. (역할 CanControl: super_admin→admin·user, admin→user.)
 
@@ -269,12 +281,13 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 
 ### 도구 정책 / 클라이언트 버전 / 명령 보안 (user, 선택 기능)
 서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략, 명령 보안=클라 디폴트만).
-- **도구 정책**(`tools/policy`)·**명령 보안**(`security/command-policy`)은 **DB(`tool_policy_settings`)**, **클라이언트 버전**(`client/version`)은 **DB(`client_version_settings`)** 에 저장되고 어드민(`/admin/tools`, `/admin/client`)에서 편집한다(즉시 반영, atomic 캐시). yaml 설정 아님.
+- **도구 정책**(`tools/policy`)·**명령 보안**(`security/command-policy`)은 **DB(전역 `tool_policy_settings` + 멤버별 `member_tool_policy`)**, **클라이언트 버전**(`client/version`)은 **DB(`client_version_settings`)** 에 저장되고 어드민(`/admin/tools` 전역, `/admin/members` 멤버별, `/admin/client`)에서 편집한다(즉시 반영, atomic 캐시). yaml 설정 아님.
+- **도구 카탈로그**: 클라이언트가 노출하는 26개 도구명은 서버 상수(`domain/toolpolicy` `ClientTools`)이자 DB 시드(`tool_catalog`)로 고정되어, 어드민이 허용/차단을 자유 문자열 대신 **고정 목록(카테고리 리스트)** 에서 고른다(오타 방지).
 
 | 메서드·경로 | 기능 |
 |---|---|
-| `GET /api/v1/tools/policy` | 도구 실행 정책 `{mode, enabled, disabled}`. `mode`=`cached`\|`realtime`(그 외 cached 간주), `enabled`=null이면 전체 허용, `disabled` 우선 |
-| `POST /api/v1/tools/authorize` | (realtime) 도구 1회 인가. body `{tool, arguments?}` → `{allowed, reason}`. disabled 우선 → enabled 화이트리스트 → 그 외 허용 |
+| `GET /api/v1/tools/policy` | **인증 멤버에 적용되는 유효** 도구 실행 정책 `{mode, enabled, disabled}`(전역 ⊕ 멤버 오버라이드, 위 §멤버별 도구 정책 합성 규칙). `mode`=`cached`\|`realtime`(그 외 cached 간주), `enabled`=null이면 전체 허용, `disabled` 우선 |
+| `POST /api/v1/tools/authorize` | (realtime) 도구 1회 인가. body `{tool, arguments?}` → `{allowed, reason}`. **인증 멤버의 유효 정책** 기준: disabled 우선 → enabled 화이트리스트 → 그 외 허용 |
 | `GET /api/v1/client/version` | 클라 버전 점검 `{latest, minimum_supported, download_url?, notice?, mandatory}`(SemVer). 클라가 자기 버전과 비교해 업데이트 알림 |
 | `GET /api/v1/security/command-policy` | 서버 추가 위험명령/경로 차단 패턴 `{blocked_patterns[], blocked_paths[]}`. 클라 내장 디폴트에 **추가만**(2중 안전). 미설정 시 빈 배열 |
 
@@ -337,7 +350,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 ### 어드민 웹 페이지 (`/admin`)
 - **스택**: 서버사이드 렌더링 `html/template` + **Bootstrap 5.3(다크 `data-bs-theme`)** + **Bootstrap Icons**(CDN). 사이드바 레이아웃, 생성/관리는 **모달**. Node 빌드 불필요, Go 바이너리에 `go:embed`.
 - **인증**: 로그인 시 JWT 를 **HttpOnly·SameSite=Lax 쿠키**(`admin_session`)에 저장. 페이지는 쿠키로 인증(API 의 Bearer 와 독립).
-- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/tools`(**도구 정책**: 모드(cached/realtime)·허용/차단 도구 목록·위험명령/경로 차단 패턴(JSON), DB 저장·즉시 반영), `/admin/client`(**클라이언트 버전**: latest·minimum_supported·download_url·notice·mandatory, DB 저장·즉시 반영 → `GET /api/v1/client/version` 에 반영), `/admin/chat`(**채팅 관리/모더레이션**: 방·메시지·첨부 집계 + 방 목록 + 방 상세(멤버·메시지 검토) + 메시지 소프트삭제·방 삭제, 삭제 시 멤버에게 실시간 반영), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`). 사이드바는 섹션별 접이식(슬라이드) 메뉴(개요/사용자/AI/저장소/채팅/보안·도구/클라이언트).
+- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·**도구 정책 오버라이드(기본/허용/차단 카테고리 리스트)**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/tools`(**전역 도구 정책**: 모드(cached/realtime)·허용/차단 도구(**카탈로그 카테고리 리스트**: 기본/허용/차단 3-상태)·위험명령/경로 차단 패턴(JSON), DB 저장·즉시 반영. 멤버별 오버라이드는 `/admin/members` 모달의 '도구' 탭), `/admin/client`(**클라이언트 버전**: latest·minimum_supported·download_url·notice·mandatory, DB 저장·즉시 반영 → `GET /api/v1/client/version` 에 반영), `/admin/chat`(**채팅 관리/모더레이션**: 방·메시지·첨부 집계 + 방 목록 + 방 상세(멤버·메시지 검토) + 메시지 소프트삭제·방 삭제, 삭제 시 멤버에게 실시간 반영), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`). 사이드바는 섹션별 접이식(슬라이드) 메뉴(개요/사용자/AI/저장소/채팅/보안·도구/클라이언트).
 
 ### 토큰 쿼터(사용자별 일·주·월 한도)
 - **모델**: **일(YYYY-MM-DD)·주(YYYY-Www, ISO)·월(YYYY-MM)** 3개 기간 한도를 동시 시행(UTC, 자동 리셋). 한도 = 윈도우별 **멤버 값(>0) 우선, 없으면 전역 기본값**, 0이면 그 윈도우 무제한. 카운트=`total_tokens`.

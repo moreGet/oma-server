@@ -54,13 +54,6 @@ func (h *Hub) Unregister(c *Client) (wasLast bool) {
 	return false
 }
 
-// IsOnline 은 멤버가 하나 이상 연결돼 있는지 반환한다.
-func (h *Hub) IsOnline(memberID string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.clients[memberID]) > 0
-}
-
 // OnlineAmong 은 주어진 멤버들 중 현재 온라인인 ID 만 반환한다.
 func (h *Hub) OnlineAmong(memberIDs []string) []string {
 	h.mu.RLock()

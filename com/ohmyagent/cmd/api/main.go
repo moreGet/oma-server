@@ -136,8 +136,8 @@ func run() error {
 	defer transcriptRecorder.Close() // 종료 시 잔여 이력 플러시
 	// 토큰 쿼터(월간 사용 한도). 카운터/한도 모두 DB → 다중 인스턴스(LB) 정확.
 	quotaService := quotaapp.NewService(dbout.NewQuotaRepository(conn, cfg.Database.Driver), authUC)
-	// 도구 정책(노출/실행 + 위험명령 차단). DB 단일 행 + atomic 캐시 → 어드민 편집 즉시 반영.
-	toolPolicyManager, err := toolpolicyapp.NewManager(dbout.NewToolPolicyRepository(conn), authUC)
+	// 도구 정책(노출/실행 + 위험명령 차단). 전역 단일 행 + 멤버 오버라이드, atomic 캐시 → 어드민 편집 즉시 반영.
+	toolPolicyManager, err := toolpolicyapp.NewManager(dbout.NewToolPolicyRepository(conn), dbout.NewMemberToolPolicyRepository(conn), authUC)
 	if err != nil {
 		return err
 	}
@@ -189,6 +189,7 @@ func run() error {
 		return err
 	}
 	clientH := httpin.NewClientHandler(clientVersionManager, toolPolicyManager)
+	memberToolPolicyH := httpin.NewMemberToolPolicyHandler(toolPolicyManager)
 	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, toolPolicyManager, clientVersionManager, messagingService, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
 	// 7) 라우트 등록(설계 §7)
@@ -210,6 +211,8 @@ func run() error {
 	router.Secured("PUT /api/v1/members/{id}/active", httpin.Handle(authH.SetActive), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("DELETE /api/v1/members/{id}", httpin.Handle(authH.DeleteMember), security.MinRole(domainauth.RoleLevelSuperAdmin))
 	router.Secured("PUT /api/v1/members/{id}/password", httpin.Handle(authH.ResetPassword), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/members/{id}/tool-policy", httpin.Handle(memberToolPolicyH.Get), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("PUT /api/v1/members/{id}/tool-policy", httpin.Handle(memberToolPolicyH.Put), security.MinRole(domainauth.RoleLevelAdmin))
 
 	router.Secured("GET /api/v1/llm-providers", httpin.Handle(provH.List), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/llm-providers/{id}", httpin.Handle(provH.Get), security.MinRole(domainauth.RoleLevelUser))

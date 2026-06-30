@@ -53,6 +53,8 @@ type quotaManager interface {
 type toolPolicyManager interface {
 	GetSettings(ctx context.Context, actorID string) (domaintoolpolicy.Settings, error)
 	UpdateSettings(ctx context.Context, cmd domaintoolpolicy.UpdateCommand) error
+	UpdateMemberPolicy(ctx context.Context, cmd domaintoolpolicy.MemberUpdateCommand) error
+	MemberPolicies() map[string]domaintoolpolicy.MemberPolicy
 }
 
 // clientVersionManager 는 어드민 클라이언트 버전 편집이 사용하는 소비자 인터페이스다(*clientversionapp.Manager 가 충족).
@@ -156,7 +158,7 @@ func parsePages() map[string]*template.Template {
 	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions", "tools", "client", "chat", "chat_room"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
-		out[n] = template.Must(template.New("layout.html").Funcs(templateFuncs).ParseFS(templatesFS, "templates/layout.html", "templates/"+n+".html"))
+		out[n] = template.Must(template.New("layout.html").Funcs(templateFuncs).ParseFS(templatesFS, "templates/layout.html", "templates/partials.html", "templates/"+n+".html"))
 	}
 	return out
 }
@@ -180,6 +182,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+basePath+"/members/{id}/token-limit", s.authed(s.memberSetTokenLimit))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/quota-reset", s.authed(s.memberResetQuota))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/session-limit", s.authed(s.memberSetSessionLimit))
+	mux.HandleFunc("POST "+basePath+"/members/{id}/tool-policy", s.authed(s.memberSetToolPolicy))
 	mux.HandleFunc("POST "+basePath+"/members/{id}/delete", s.authed(s.memberDelete))
 	mux.HandleFunc("POST "+basePath+"/quota/default", s.authed(s.quotaSetDefault))
 

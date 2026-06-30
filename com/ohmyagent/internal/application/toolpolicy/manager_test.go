@@ -19,6 +19,40 @@ func (r *fakeRepo) Save(_ context.Context, s domaintoolpolicy.Settings) error {
 	return nil
 }
 
+// fakeMemberRepo 는 멤버 오버라이드 인메모리 레포다.
+type fakeMemberRepo struct {
+	m map[string]domaintoolpolicy.MemberPolicy
+}
+
+func newFakeMemberRepo() *fakeMemberRepo {
+	return &fakeMemberRepo{m: map[string]domaintoolpolicy.MemberPolicy{}}
+}
+
+func (r *fakeMemberRepo) Get(_ context.Context, id string) (domaintoolpolicy.MemberPolicy, error) {
+	if p, ok := r.m[id]; ok {
+		return p, nil
+	}
+	return domaintoolpolicy.MemberPolicy{MemberID: id}, nil
+}
+
+func (r *fakeMemberRepo) All(context.Context) ([]domaintoolpolicy.MemberPolicy, error) {
+	out := make([]domaintoolpolicy.MemberPolicy, 0, len(r.m))
+	for _, p := range r.m {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *fakeMemberRepo) Save(_ context.Context, p domaintoolpolicy.MemberPolicy) error {
+	r.m[p.MemberID] = p
+	return nil
+}
+
+func (r *fakeMemberRepo) Delete(_ context.Context, id string) error {
+	delete(r.m, id)
+	return nil
+}
+
 type allowGate struct{}
 
 func (allowGate) RequireAdmin(context.Context, string) error { return nil }
@@ -31,7 +65,7 @@ func (denyGate) RequireAdmin(context.Context, string) error { return errForbidde
 
 func TestManager_UpdateNormalizesReloadsAndStamps(t *testing.T) {
 	repo := &fakeRepo{s: domaintoolpolicy.DefaultSettings()}
-	m, err := NewManager(repo, allowGate{})
+	m, err := NewManager(repo, newFakeMemberRepo(), allowGate{})
 	require.NoError(t, err)
 
 	err = m.UpdateSettings(context.Background(), domaintoolpolicy.UpdateCommand{
@@ -48,8 +82,8 @@ func TestManager_UpdateNormalizesReloadsAndStamps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 캐시(스냅샷) 반영 확인.
-	mode, enabled, disabled := m.ToolPolicy()
+	// 캐시(스냅샷) 반영 확인 — 오버라이드 없는 멤버는 전역 유효 정책을 그대로 받는다.
+	mode, enabled, disabled := m.EffectivePolicy("no-override-user")
 	assert.Equal(t, "cached", mode)
 	assert.Equal(t, []string{"read_file", "grep"}, enabled)
 	assert.Equal(t, []string{"kill_process"}, disabled)
@@ -71,7 +105,7 @@ func TestManager_UpdateNormalizesReloadsAndStamps(t *testing.T) {
 
 func TestManager_GateDenies(t *testing.T) {
 	repo := &fakeRepo{s: domaintoolpolicy.DefaultSettings()}
-	m, err := NewManager(repo, denyGate{})
+	m, err := NewManager(repo, newFakeMemberRepo(), denyGate{})
 	require.NoError(t, err)
 
 	_, err = m.GetSettings(context.Background(), "u1")
@@ -83,4 +117,40 @@ func TestManager_GateDenies(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, errForbidden)
 	assert.Empty(t, repo.s.Disabled) // 게이트 거부 시 저장 안 됨
+
+	err = m.UpdateMemberPolicy(context.Background(), domaintoolpolicy.MemberUpdateCommand{
+		MemberID: "m1", ActorID: "u1", Disabled: []string{"x"},
+	})
+	assert.ErrorIs(t, err, errForbidden)
+}
+
+func TestManager_MemberPolicyLayeredMerge(t *testing.T) {
+	repo := &fakeRepo{s: domaintoolpolicy.DefaultSettings()}
+	m, err := NewManager(repo, newFakeMemberRepo(), allowGate{})
+	require.NoError(t, err)
+
+	// 전역: kill_process 차단(나머지 전체 허용).
+	require.NoError(t, m.UpdateSettings(context.Background(), domaintoolpolicy.UpdateCommand{
+		ActorID:  "admin",
+		Settings: domaintoolpolicy.Settings{Disabled: []string{"kill_process"}},
+	}))
+	// 멤버 u1: screenshot 추가 차단(계층 병합 = 전역 ∪ 멤버).
+	require.NoError(t, m.UpdateMemberPolicy(context.Background(), domaintoolpolicy.MemberUpdateCommand{
+		MemberID: "u1", ActorID: "admin", Disabled: []string{"screenshot"},
+	}))
+
+	_, _, disabled := m.EffectivePolicy("u1")
+	assert.ElementsMatch(t, []string{"kill_process", "screenshot"}, disabled)
+
+	// 오버라이드 없는 멤버는 전역만 적용.
+	_, _, d2 := m.EffectivePolicy("u2")
+	assert.Equal(t, []string{"kill_process"}, d2)
+
+	// 빈 오버라이드 저장 → 행 삭제(전역만 적용).
+	require.NoError(t, m.UpdateMemberPolicy(context.Background(), domaintoolpolicy.MemberUpdateCommand{
+		MemberID: "u1", ActorID: "admin",
+	}))
+	_, _, d3 := m.EffectivePolicy("u1")
+	assert.Equal(t, []string{"kill_process"}, d3)
+	assert.Empty(t, m.MemberPolicies())
 }

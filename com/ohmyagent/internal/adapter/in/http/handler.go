@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // 에러 코드 상수(스펙 §5.2). AppError.Code 와 HTTPStatus() 매핑이 공유한다.
@@ -227,6 +228,17 @@ func writeSSEEvent(w http.ResponseWriter, event string, payload any) error {
 	buf.WriteByte('\n')
 	_, err := w.Write(buf.Bytes())
 	return err
+}
+
+// writeSSEHeaders 는 SSE 응답 헤더(+200)를 기록하고 write deadline 을 해제한다(장시간 스트리밍 보존).
+// chat/agent 스트리밍 핸들러가 첫 조각 직전에 1회 호출한다(지연 기록).
+func writeSSEHeaders(w http.ResponseWriter, rc *http.ResponseController) {
+	_ = rc.SetWriteDeadline(time.Time{}) // 스트리밍: write deadline 해제(서버 WriteTimeout 우회)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // nginx 버퍼링 비활성
+	w.WriteHeader(http.StatusOK)
 }
 
 // atoiDefault 는 문자열을 정수로 파싱하고, 실패 시 def 를 반환한다.

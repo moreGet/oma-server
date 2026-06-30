@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 )
 
 // PolicyProvider 는 현재 도구/명령 정책 스냅샷을 제공한다(DB 백엔드 매니저가 atomic 캐시로 구현).
 // 핸들러는 요청마다 DB 를 치지 않고 이 무락 스냅샷을 읽는다.
 type PolicyProvider interface {
-	ToolPolicy() (mode string, enabled, disabled []string)
+	// EffectivePolicy 는 멤버에 적용되는 유효 도구 정책(전역 ⊕ 멤버 오버라이드)을 반환한다.
+	EffectivePolicy(memberID string) (mode string, enabled, disabled []string)
 	CommandPolicy() (patterns []domaintoolpolicy.BlockedPattern, paths []domaintoolpolicy.BlockedPath)
 }
 
@@ -39,9 +41,10 @@ type toolPolicyResp struct {
 	Disabled []string `json:"disabled"` // 블랙리스트(enabled 보다 우선)
 }
 
-// ToolsPolicy 는 세션 도구 정책(모드 + cached 목록)을 반환한다.
+// ToolsPolicy 는 세션 도구 정책(모드 + cached 목록)을 반환한다(인증 멤버에 유효한 정책).
 func (h *ClientHandler) ToolsPolicy(w http.ResponseWriter, r *http.Request) error {
-	mode, enabled, disabled := h.policy.ToolPolicy()
+	claims, _ := security.ClaimsFrom(r.Context())
+	mode, enabled, disabled := h.policy.EffectivePolicy(claims.MemberID)
 	if mode != "realtime" {
 		mode = "cached" // 그 외 값은 cached 로 간주(스펙)
 	}
@@ -71,13 +74,14 @@ func (h *ClientHandler) ToolsAuthorize(w http.ResponseWriter, r *http.Request) e
 	if req.Tool == "" {
 		return ErrBadRequest("tool is required")
 	}
-	allowed, reason := h.authorize(req.Tool)
+	claims, _ := security.ClaimsFrom(r.Context())
+	allowed, reason := h.authorize(claims.MemberID, req.Tool)
 	writeJSON(w, http.StatusOK, toolAuthorizeResp{Allowed: allowed, Reason: reason})
 	return nil
 }
 
-func (h *ClientHandler) authorize(tool string) (bool, *string) {
-	_, enabled, disabled := h.policy.ToolPolicy()
+func (h *ClientHandler) authorize(memberID, tool string) (bool, *string) {
+	_, enabled, disabled := h.policy.EffectivePolicy(memberID)
 	for _, d := range disabled {
 		if d == tool {
 			reason := "서버 정책에 의해 차단된 도구입니다"

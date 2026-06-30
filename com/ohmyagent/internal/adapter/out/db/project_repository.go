@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	domainproject "aiagent/com/ohmyagent/internal/domain/project"
@@ -88,7 +89,10 @@ func (r *ProjectRepository) DeleteProject(ctx context.Context, ownerID, id strin
 	if n, _ := res.RowsAffected(); n == 0 {
 		return domainproject.ErrNotFound
 	}
-	// 소속 대화 메타데이터도 정리(본문 블롭은 보존 정책에 맡김).
-	_, _ = r.db.ExecContext(ctx, "DELETE FROM conversations WHERE owner_id=? AND project_id=?", ownerID, id)
+	// 소속 대화 메타데이터도 정리(본문 블롭은 보존 정책에 맡김). 프로젝트는 이미 삭제됐으므로
+	// 실패해도 호출자에 에러를 올리지 않되, 고아 행이 조용히 남지 않게 로깅한다.
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM conversations WHERE owner_id=? AND project_id=?", ownerID, id); err != nil {
+		slog.Error("project: cascade delete conversations failed", "event", "project.delete", "owner_id", ownerID, "project_id", id, "error", err)
+	}
 	return nil
 }

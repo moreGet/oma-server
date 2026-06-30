@@ -62,12 +62,7 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 		if wroteHeader {
 			return nil
 		}
-		_ = rc.SetWriteDeadline(time.Time{}) // 스트리밍: write deadline 해제
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no")
-		w.WriteHeader(http.StatusOK)
+		writeSSEHeaders(w, rc)
 		wroteHeader = true
 		if err := writeSSEEvent(w, "message_start", agentStartDTO{Role: "assistant", Model: cmd.Model}); err != nil {
 			return err
@@ -307,10 +302,20 @@ type agentStopDTO struct {
 // agentErrToHTTP 는 agent/llmprovider 도메인 에러를 AppError 로 매핑한다.
 func agentErrToHTTP(err error) error {
 	var ve *domainagent.ErrValidation
+	if errors.As(err, &ve) {
+		return ErrBadRequest(ve.Msg)
+	}
+	if mapped := mapProviderQuotaAuthErr(err); mapped != nil {
+		return mapped
+	}
+	return err
+}
+
+// mapProviderQuotaAuthErr 은 chat/agent 공통의 쿼터·LLM Provider·인가 에러를 HTTP 에러로 매핑한다.
+// 매핑 대상이 아니면 nil 을 반환한다(호출부가 도메인별 검증 에러를 먼저 처리하고, 여기로 위임).
+func mapProviderQuotaAuthErr(err error) error {
 	var qe *domainquota.ExceededError
 	switch {
-	case errors.As(err, &ve):
-		return ErrBadRequest(ve.Msg)
 	case errors.As(err, &qe):
 		return ErrTooManyRequests(qe.Error()) // 윈도우·used/limit·리셋 시각 포함
 	case errors.Is(err, domainquota.ErrExceeded):
@@ -324,6 +329,6 @@ func agentErrToHTTP(err error) error {
 	case errors.Is(err, domainauth.ErrPermission):
 		return ErrForbidden("permission denied")
 	default:
-		return err
+		return nil
 	}
 }

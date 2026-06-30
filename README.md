@@ -74,7 +74,7 @@ APP_ENV=local go run ./com/ohmyagent/cmd/api
 
 ### 5) 어드민 콘솔
 브라우저에서 **`http://localhost:8080/admin/login`** → `admin` / `admin`(로컬 기본) 로 로그인.
-대시보드·멤버 관리·Provider 관리·대화 이력·세션 저장·**도구 정책(`/admin/tools`)**·**클라이언트 버전(`/admin/client`)**·**채팅 관리/모더레이션(`/admin/chat`)**·내 계정 페이지 제공(사이드바는 섹션별 접이식 메뉴).
+대시보드·멤버 관리(역할·토큰/세션 한도·**멤버별 도구 정책 오버라이드**)·Provider 관리·대화 이력·세션 저장·**도구 정책(`/admin/tools`, 전역 + 카탈로그 카테고리 리스트)**·**클라이언트 버전(`/admin/client`)**·**채팅 관리/모더레이션(`/admin/chat`)**·내 계정 페이지 제공(사이드바는 섹션별 접이식 메뉴).
 
 > ⚠️ `/admin`(끝 슬래시 없음)은 매칭되지 않을 수 있으니 `/admin/login` 또는 `/admin/`으로 접속.
 

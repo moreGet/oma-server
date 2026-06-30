@@ -92,6 +92,9 @@
           <li class="nav-item" role="presentation">
             <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-sec-{{$m.ID}}" type="button" role="tab">세션·보안</button>
           </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tk-tools-{{$m.ID}}" type="button" role="tab">도구{{if $m.ToolPolicyOverride}} <span class="badge bg-primary">●</span>{{end}}</button>
+          </li>
           {{if $.CanDeleteMembers}}
           <li class="nav-item" role="presentation">
             <button class="nav-link danger" data-bs-toggle="pill" data-bs-target="#tk-danger-{{$m.ID}}" type="button" role="tab"><i class="bi bi-trash"></i></button>
@@ -198,6 +201,15 @@
                 <input type="password" name="new_password" class="form-control form-control-sm" placeholder="새 비밀번호 (8자 이상)" minlength="8" required>
                 <button type="submit" class="btn btn-outline-light btn-sm text-nowrap">리셋</button>
               </div>
+            </form>
+          </div>
+
+          {{/* 멤버별 도구 정책 오버라이드(전역=보안 하한, 멤버는 추가 제한만) */}}
+          <div class="tab-pane fade" id="tk-tools-{{$m.ID}}" role="tabpanel">
+            <form method="post" action="/admin/members/{{$m.ID}}/tool-policy" class="vstack gap-2">
+              <span class="sect-label">멤버 도구 정책 <span class="text-secondary text-lowercase">(전역에 계층 병합 — 전역 차단은 항상 적용, 멤버는 추가 제한)</span></span>
+              {{template "toolEditor" $m.ToolEditor}}
+              <div><button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg"></i> 저장</button></div>
             </form>
           </div>
 

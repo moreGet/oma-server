@@ -24,6 +24,11 @@ import (
 // JSON API 는 별도로 RFC3339(T 규격, UTC) 를 유지한다 — 여기는 화면 표시 전용.
 const uiTimeFormat = "2006-01-02 15:04:05"
 
+const (
+	membersPageLimit   = 100 // 멤버 관리 목록 조회 상한(어드민 단일 페이지)
+	adminRoomListLimit = 200 // 채팅 관리 방 목록 조회 상한
+)
+
 // kstZone 은 한국 표준시(UTC+9, DST 없음)다. tzdata 의존 없이 고정 오프셋으로 표시한다.
 var kstZone = time.FixedZone("KST", 9*60*60)
 
@@ -68,6 +73,10 @@ type memberView struct {
 	Quota []memberQuotaView
 	// SessionLimit 는 멤버별 최대 세션 수 오버라이드(0 = 전역 기본값).
 	SessionLimit int
+	// ToolEditor 는 멤버별 도구 정책 오버라이드 편집기 데이터(모달의 리스트 UI).
+	ToolEditor toolEditorView
+	// ToolPolicyOverride 는 멤버 도구 오버라이드 존재 여부(모달 배지 표시용).
+	ToolPolicyOverride bool
 }
 
 // memberQuotaView 는 한 윈도우의 표시용 사용률이다(유효 한도 = 오버라이드>0 ? 오버라이드 : 전역 기본).
@@ -230,7 +239,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "멤버 관리", "members")
-	members, _, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{Limit: 100})
+	members, _, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{Limit: membersPageLimit})
 	if err != nil {
 		s.setFlashError(w, "멤버 목록을 볼 권한이 없습니다.")
 		s.redirect(w, r, basePath+"/")
@@ -273,6 +282,16 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 				memberViews[i].SessionLimit = limits[memberViews[i].ID]
 			}
 		}
+	}
+	// 멤버별 도구 정책 오버라이드(모달의 도구 리스트 UI). 오버라이드 없는 멤버는 전부 '기본'으로 표시.
+	memberPolicies := map[string]domaintoolpolicy.MemberPolicy{}
+	if s.toolPolicy != nil {
+		memberPolicies = s.toolPolicy.MemberPolicies()
+	}
+	for i := range memberViews {
+		p := memberPolicies[memberViews[i].ID]
+		memberViews[i].ToolEditor = buildToolEditor("m"+memberViews[i].ID, p.Enabled, p.Disabled)
+		memberViews[i].ToolPolicyOverride = len(p.Enabled) > 0 || len(p.Disabled) > 0
 	}
 	pd.Data = mv
 	s.render(w, "members", pd)
@@ -716,12 +735,13 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, basePath+"/")
 		return
 	}
-	rooms, _ := s.chat.AdminListRooms(r.Context(), 200)
+	rooms, _ := s.chat.AdminListRooms(r.Context(), adminRoomListLimit)
 	cv := chatView{Stats: chatStatsView{
 		Rooms: stats.Rooms, GroupRooms: stats.GroupRooms, DirectRooms: stats.DirectRooms,
 		Messages: stats.Messages, DeletedMessages: stats.DeletedMessages,
 		Attachments: stats.Attachments, AttachmentSize: humanBytes(stats.AttachmentBytes),
 	}}
+	cv.Rooms = make([]adminRoomRow, 0, len(rooms))
 	for _, rm := range rooms {
 		cv.Rooms = append(cv.Rooms, adminRoomRow{
 			ID: rm.ID, Type: string(rm.Type), Name: roomLabel(string(rm.Type), rm.Name),
@@ -744,6 +764,7 @@ func (s *Server) chatRoomPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rv := chatRoomView{ID: room.ID, Type: string(room.Type), Name: roomLabel(string(room.Type), room.Name), Members: members}
+	rv.Messages = make([]adminMsgRow, 0, len(msgs))
 	for _, m := range msgs {
 		rv.Messages = append(rv.Messages, adminMsgRow{
 			ID: m.ID, SenderID: m.SenderID, Content: m.Content, CreatedAt: fmtUnixKST(m.CreatedAt),
@@ -794,30 +815,35 @@ func humanBytes(n int64) string {
 
 // --- 도구 정책(/admin/tools) ---
 
-// toolChipView 는 카탈로그 도구 1개의 칩 상태다(State: default|enabled|disabled).
+// toolChipView 는 카탈로그 도구 1개의 상태다(State: default|enabled|disabled).
 type toolChipView struct {
 	Name  string
 	State string
 }
 
-// toolCategoryView 는 카테고리별 도구 칩 묶음이다(노출 순서 보존).
+// toolCategoryView 는 카테고리별 도구 묶음이다(노출 순서 보존).
 type toolCategoryView struct {
 	Category string
 	Tools    []toolChipView
 }
 
-// toolPolicyView 는 도구 정책 편집 화면 데이터다.
-// 도구 허용/차단은 카탈로그 기반 칩(Categories)으로 편집하고,
-// 카탈로그에 없는 도구는 Unknown* 텍스트로 보존·수동 편집한다.
-type toolPolicyView struct {
-	Mode            string
-	Categories      []toolCategoryView // 카탈로그 칩(카테고리별)
+// toolEditorView 는 도구 허용/차단 편집기(카테고리 리스트 + 카탈로그 외 수동 입력) 공용 데이터다.
+// 전역 도구 정책 페이지와 멤버 모달이 같은 템플릿 파셜("toolEditor")로 렌더한다.
+type toolEditorView struct {
+	IDPrefix        string             // 라디오 id 유일화 접두사(멤버별 모달이 한 페이지에 여러 개라 필수)
+	Categories      []toolCategoryView // 카탈로그 도구(카테고리별)
 	UnknownEnabled  string             // 카탈로그 외 허용 도구(줄바꿈)
 	UnknownDisabled string             // 카탈로그 외 차단 도구(줄바꿈)
-	PatternsJSON    string             // [{type,pattern,reason,script_type}]
-	PathsJSON       string             // [{type,pattern,reason}]
-	UpdatedAt       string             // KST, 비어있으면 미저장
-	UpdatedBy       string
+}
+
+// toolPolicyView 는 전역 도구 정책 편집 화면 데이터다.
+type toolPolicyView struct {
+	Mode           string
+	toolEditorView        // 임베드: Categories/UnknownEnabled/UnknownDisabled 승격
+	PatternsJSON   string // [{type,pattern,reason,script_type}]
+	PathsJSON      string // [{type,pattern,reason}]
+	UpdatedAt      string // KST, 비어있으면 미저장
+	UpdatedBy      string
 }
 
 func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
@@ -828,15 +854,23 @@ func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, basePath+"/")
 		return
 	}
-	pd.Data = buildToolPolicyView(st)
+	pd.Data = toolPolicyView{
+		Mode:           st.Mode,
+		toolEditorView: buildToolEditor("g", st.Enabled, st.Disabled),
+		PatternsJSON:   marshalIndent(st.BlockedPatterns),
+		PathsJSON:      marshalIndent(st.BlockedPaths),
+		UpdatedAt:      fmtUnixKST(st.UpdatedAt),
+		UpdatedBy:      st.UpdatedBy,
+	}
 	s.render(w, "tools", pd)
 }
 
-// buildToolPolicyView 는 정책 스냅샷을 칩 편집 화면 데이터로 변환한다.
+// buildToolEditor 는 허용/차단 목록을 카테고리 리스트 편집기 데이터로 변환한다.
+// idPrefix 는 라디오 id 충돌을 막는 접두사다(전역="g", 멤버="m"+ID).
 // 도구 상태는 차단 우선(authorize 로직과 동일): disabled > enabled > default.
-func buildToolPolicyView(st domaintoolpolicy.Settings) toolPolicyView {
-	enabledSet := toStringSet(st.Enabled)
-	disabledSet := toStringSet(st.Disabled)
+func buildToolEditor(idPrefix string, enabled, disabled []string) toolEditorView {
+	enabledSet := toStringSet(enabled)
+	disabledSet := toStringSet(disabled)
 
 	var cats []toolCategoryView
 	idx := make(map[string]int)
@@ -855,16 +889,11 @@ func buildToolPolicyView(st domaintoolpolicy.Settings) toolPolicyView {
 		}
 		cats[i].Tools = append(cats[i].Tools, toolChipView{Name: t.Name, State: state})
 	}
-
-	return toolPolicyView{
-		Mode:            st.Mode,
+	return toolEditorView{
+		IDPrefix:        idPrefix,
 		Categories:      cats,
-		UnknownEnabled:  strings.Join(unknownTools(st.Enabled), "\n"),
-		UnknownDisabled: strings.Join(unknownTools(st.Disabled), "\n"),
-		PatternsJSON:    marshalIndent(st.BlockedPatterns),
-		PathsJSON:       marshalIndent(st.BlockedPaths),
-		UpdatedAt:       fmtUnixKST(st.UpdatedAt),
-		UpdatedBy:       st.UpdatedBy,
+		UnknownEnabled:  strings.Join(unknownTools(enabled), "\n"),
+		UnknownDisabled: strings.Join(unknownTools(disabled), "\n"),
 	}
 }
 
@@ -888,18 +917,9 @@ func unknownTools(in []string) []string {
 	return out
 }
 
-func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	patterns, perr := parseBlockedPatterns(r.FormValue("blocked_patterns"))
-	paths, qerr := parseBlockedPaths(r.FormValue("blocked_paths"))
-	if perr != nil || qerr != nil {
-		s.setFlashError(w, "차단 패턴/경로 JSON 형식 오류 — 입력을 확인하세요.")
-		s.redirect(w, r, basePath+"/tools")
-		return
-	}
-
-	// 카탈로그 칩 상태(t_<name>=default|enabled|disabled) → enabled/disabled 재구성.
-	var enabled, disabled []string
+// parseToolEditorForm 은 도구 편집기 폼(t_<name> 라디오 + enabled_extra/disabled_extra)을
+// enabled/disabled 슬라이스로 재구성한다(전역·멤버 폼 공용).
+func parseToolEditorForm(r *http.Request) (enabled, disabled []string) {
 	for _, t := range domaintoolpolicy.ClientTools {
 		switch r.FormValue("t_" + t.Name) {
 		case "enabled":
@@ -911,6 +931,20 @@ func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
 	// 카탈로그 외 도구는 수동 입력으로 보존.
 	enabled = append(enabled, splitLines(r.FormValue("enabled_extra"))...)
 	disabled = append(disabled, splitLines(r.FormValue("disabled_extra"))...)
+	return enabled, disabled
+}
+
+func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	patterns, perr := parseBlockedPatterns(r.FormValue("blocked_patterns"))
+	paths, qerr := parseBlockedPaths(r.FormValue("blocked_paths"))
+	if perr != nil || qerr != nil {
+		s.setFlashError(w, "차단 패턴/경로 JSON 형식 오류 — 입력을 확인하세요.")
+		s.redirect(w, r, basePath+"/tools")
+		return
+	}
+
+	enabled, disabled := parseToolEditorForm(r)
 
 	err := s.toolPolicy.UpdateSettings(r.Context(), domaintoolpolicy.UpdateCommand{
 		ActorID: actorID(r),
@@ -993,6 +1027,20 @@ func (s *Server) memberSetSessionLimit(w http.ResponseWriter, r *http.Request) {
 	maxSessions, _ := strconv.Atoi(r.FormValue("max_sessions"))
 	err := s.sessions.SetMemberLimit(r.Context(), actorID(r), r.PathValue("id"), maxSessions)
 	s.flashResult(w, err, "최대 세션 수를 변경했습니다.")
+	s.redirect(w, r, basePath+"/members")
+}
+
+// memberSetToolPolicy 는 멤버별 도구 정책 오버라이드(허용/차단)를 저장한다(빈 입력=오버라이드 해제).
+func (s *Server) memberSetToolPolicy(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	enabled, disabled := parseToolEditorForm(r)
+	err := s.toolPolicy.UpdateMemberPolicy(r.Context(), domaintoolpolicy.MemberUpdateCommand{
+		MemberID: r.PathValue("id"),
+		Enabled:  enabled,
+		Disabled: disabled,
+		ActorID:  actorID(r),
+	})
+	s.flashResult(w, err, "멤버 도구 정책을 저장했습니다.")
 	s.redirect(w, r, basePath+"/members")
 }
 

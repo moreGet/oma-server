@@ -20,7 +20,9 @@ type fakeProvider struct {
 	paths             []domaintoolpolicy.BlockedPath
 }
 
-func (f fakeProvider) ToolPolicy() (string, []string, []string) { return f.mode, f.enabled, f.disabled }
+func (f fakeProvider) EffectivePolicy(string) (string, []string, []string) {
+	return f.mode, f.enabled, f.disabled
+}
 func (f fakeProvider) CommandPolicy() ([]domaintoolpolicy.BlockedPattern, []domaintoolpolicy.BlockedPath) {
 	return f.patterns, f.paths
 }
@@ -49,18 +51,18 @@ func TestClientHandler_ToolsPolicy(t *testing.T) {
 func TestClientHandler_Authorize(t *testing.T) {
 	h := NewClientHandler(fakeVersionProvider{}, fakeProvider{enabled: []string{"read_file"}, disabled: []string{"kill_process"}})
 
-	a, reason := h.authorize("kill_process") // disabled 우선
+	a, reason := h.authorize("u1", "kill_process") // disabled 우선
 	assert.False(t, a)
 	assert.NotNil(t, reason)
 
-	a, _ = h.authorize("read_file") // enabled 화이트리스트 포함
+	a, _ = h.authorize("u1", "read_file") // enabled 화이트리스트 포함
 	assert.True(t, a)
 
-	a, _ = h.authorize("write_file") // enabled 지정인데 미포함 → 차단
+	a, _ = h.authorize("u1", "write_file") // enabled 지정인데 미포함 → 차단
 	assert.False(t, a)
 
 	open := NewClientHandler(fakeVersionProvider{}, fakeProvider{}) // 목록 없음 → 전체 허용
-	a, _ = open.authorize("anything")
+	a, _ = open.authorize("u1", "anything")
 	assert.True(t, a)
 }
 

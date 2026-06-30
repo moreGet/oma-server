@@ -3,6 +3,7 @@ package httpin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,6 +12,10 @@ import (
 	messagingapp "aiagent/com/ohmyagent/internal/application/messaging"
 	domainmessaging "aiagent/com/ohmyagent/internal/domain/messaging"
 )
+
+// defaultMessageHistoryLimit 은 메시지 이력/멘션 피드 조회 기본 페이지 크기다(미지정 시).
+// 서비스/레포지토리에서 상한(최대 200)으로 다시 보정한다.
+const defaultMessageHistoryLimit = 50
 
 // messagingService 는 채팅 유스케이스 소비자 인터페이스다(*messagingapp.Service 가 충족).
 type messagingService interface {
@@ -240,7 +245,7 @@ func (h *MessagingHandler) CreateDirect(w http.ResponseWriter, r *http.Request) 
 func (h *MessagingHandler) History(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
 	roomID := r.PathValue("id")
-	limit := atoiDefault(r.URL.Query().Get("limit"), 50)
+	limit := atoiDefault(r.URL.Query().Get("limit"), defaultMessageHistoryLimit)
 	before := r.URL.Query().Get("before")
 	msgs, err := h.svc.History(r.Context(), claims.MemberID, roomID, limit, before)
 	if err != nil {
@@ -357,7 +362,7 @@ func (h *MessagingHandler) Presence(w http.ResponseWriter, r *http.Request) erro
 // Mentions 는 GET /api/v1/chat/mentions?limit= — 나를 멘션한 최신 메시지(알림 피드).
 func (h *MessagingHandler) Mentions(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
-	limit := atoiDefault(r.URL.Query().Get("limit"), 50)
+	limit := atoiDefault(r.URL.Query().Get("limit"), defaultMessageHistoryLimit)
 	msgs, err := h.svc.MentionsFeed(r.Context(), claims.MemberID, limit)
 	if err != nil {
 		return messagingErr(err)
@@ -421,7 +426,7 @@ func messagingErr(err error) error {
 	case errors.Is(err, domainmessaging.ErrAttachmentNotFound):
 		return ErrNotFound("attachment not found")
 	case errors.Is(err, domainmessaging.ErrAttachmentTooLarge):
-		return ErrBadRequest("attachment exceeds max size (10 MiB)")
+		return ErrBadRequest(fmt.Sprintf("attachment exceeds max size (%d MiB)", domainmessaging.MaxAttachmentBytes>>20))
 	case errors.Is(err, domainmessaging.ErrAttachmentEmpty):
 		return ErrBadRequest("attachment is empty")
 	case errors.Is(err, domainmessaging.ErrNotMember):

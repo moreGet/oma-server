@@ -17,10 +17,14 @@
       background:linear-gradient(135deg,#6366f1,#8b5cf6); font-size:1.25rem; flex:0 0 auto; }
     .brand small { color:var(--bs-secondary-color); font-weight:500; }
     .sidebar .nav-link { display:flex; align-items:center; gap:.7rem; color:var(--bs-secondary-color);
-      border-radius:.6rem; padding:.6rem .8rem; font-weight:500; }
+      border-radius:.6rem; padding:.6rem .8rem; font-weight:500;
+      transition:background-color .15s ease, color .15s ease; }
     .sidebar .nav-link i { font-size:1.1rem; }
+    /* 클릭(포커스)만으로는 하이라이트가 남지 않게 한다 — 호버는 일시적, .active 만 지속 점등 */
+    .sidebar .nav-link:focus { background:transparent; color:var(--bs-secondary-color); box-shadow:none; outline:none; }
     .sidebar .nav-link:hover { background:var(--bs-tertiary-bg); color:var(--bs-body-color); }
     .sidebar .nav-link.active { background:#6366f1; color:#fff; box-shadow:0 6px 16px rgba(99,102,241,.4); }
+    .sidebar .nav-link:focus-visible { outline:2px solid rgba(99,102,241,.6); outline-offset:-2px; } /* 키보드 접근성 */
     .nav-label { font-size:.7rem; text-transform:uppercase; letter-spacing:.08em;
       color:#5b6473; font-weight:700; padding:.5rem .8rem .3rem; }
     /* 접이식 섹션 토글(슬라이드 메뉴) */

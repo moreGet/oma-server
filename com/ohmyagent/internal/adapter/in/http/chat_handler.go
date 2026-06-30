@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
-	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainchat "aiagent/com/ohmyagent/internal/domain/chat"
-	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
 	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
 )
@@ -76,13 +74,7 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		if wroteHeader {
 			return nil
 		}
-		// 스트리밍은 장시간일 수 있으므로 write deadline 을 해제(서버 WriteTimeout 우회).
-		_ = rc.SetWriteDeadline(time.Time{})
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no") // nginx 버퍼링 비활성
-		w.WriteHeader(http.StatusOK)
+		writeSSEHeaders(w, rc)
 		wroteHeader = true
 		return rc.Flush()
 	}
@@ -238,23 +230,11 @@ func toChatChunkDTO(c domainchat.StreamChunk) chatChunkDTO {
 // chatErrToHTTP 는 chat/llmprovider 도메인 에러를 AppError 로 매핑한다.
 func chatErrToHTTP(err error) error {
 	var ve *domainchat.ErrValidation
-	var qe *domainquota.ExceededError
-	switch {
-	case errors.As(err, &ve):
+	if errors.As(err, &ve) {
 		return ErrBadRequest(ve.Msg)
-	case errors.As(err, &qe):
-		return ErrTooManyRequests(qe.Error()) // 윈도우·used/limit·리셋 시각 포함
-	case errors.Is(err, domainquota.ErrExceeded):
-		return ErrTooManyRequests("token quota exceeded")
-	case errors.Is(err, domainllmprovider.ErrNoActiveProvider):
-		return ErrNotFound("no active llm provider")
-	case errors.Is(err, domainllmprovider.ErrChatUnsupported):
-		return ErrBadGateway("active provider does not support chat")
-	case errors.Is(err, domainllmprovider.ErrUpstream):
-		return ErrBadGateway("llm provider request failed")
-	case errors.Is(err, domainauth.ErrPermission):
-		return ErrForbidden("permission denied")
-	default:
-		return err
 	}
+	if mapped := mapProviderQuotaAuthErr(err); mapped != nil {
+		return mapped
+	}
+	return err
 }
