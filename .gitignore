@@ -5,7 +5,8 @@
 /server.exe
 *.exe
 *.exe~
-*.dll
+*.dll`123458
+
 *.so
 *.dylib
 
