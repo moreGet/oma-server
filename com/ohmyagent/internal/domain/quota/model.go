@@ -43,10 +43,7 @@ func (w Window) Label() string {
 }
 
 // ResetAfter 는 해당 윈도우가 0으로 리셋되는 다음 경계 시각(UTC)을 반환한다.
-//
-//	Daily   → 다음 UTC 자정
-//	Weekly  → 다음 월요일 00:00 UTC(ISO 주 시작)
-//	Monthly → 다음 달 1일 00:00 UTC
+// Daily→다음 자정, Weekly→다음 월요일 00:00(ISO 주 시작), Monthly→다음 달 1일 00:00.
 func ResetAfter(w Window, t time.Time) time.Time {
 	day := t.UTC().Truncate(24 * time.Hour) // 오늘 00:00 UTC
 	switch w {
@@ -75,11 +72,8 @@ const (
 // Windows 는 시행/표시 순서(일→주→월)다.
 var Windows = []Window{Daily, Weekly, Monthly}
 
-// PeriodKey 는 윈도우별 기간 키를 반환한다(UTC). 세 윈도우의 키 포맷이 달라 같은 테이블에서 충돌하지 않는다.
-//
-//	Daily   → "2006-01-02"
-//	Weekly  → "2006-W02"(ISO 주차)
-//	Monthly → "2006-01"
+// PeriodKey 는 윈도우별 기간 키(UTC)를 반환한다. 키 포맷이 달라 같은 테이블에서 충돌하지 않는다.
+// Daily→"2006-01-02", Weekly→"2006-W02"(ISO 주차), Monthly→"2006-01".
 func PeriodKey(w Window, t time.Time) string {
 	tu := t.UTC()
 	switch w {

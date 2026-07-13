@@ -110,8 +110,7 @@ func (c *Config) SeedsInitialAdmin() bool {
 }
 
 // ResetsDatabase 는 기동 시 DB 를 파괴적으로 초기화(drop & create)할지 판정한다.
-// 기본은 false(데이터 보존). 환경변수 APP_DB_RESET=1(true/yes/on)로 명시적으로 옵트인할 때만
-// 동작하며, 운영(prod)에서는 옵트인하더라도 절대 초기화하지 않는다(데이터 보호).
+// 기본 false. APP_DB_RESET=1(true/yes/on) 옵트인 시에만 동작하며 prod 에서는 절대 초기화하지 않는다.
 func (c *Config) ResetsDatabase() bool {
 	return c.resetDB && !c.isProduction()
 }
@@ -145,8 +144,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// expandHomePath 는 DSN 의 선두 `~/`(또는 `file:~/`)를 사용자 홈 디렉터리로 확장한다.
-// sqlite 로컬 DSN 을 홈 경로(리눅스 fs)에 두어 /mnt/c(Windows 마운트)의 sqlite I/O 이슈를 피하기 위함이다.
+// expandHomePath 는 DSN 선두 `~/`(또는 `file:~/`)를 홈 디렉터리로 확장한다(/mnt/c Windows 마운트의 sqlite I/O 이슈 회피).
 // 홈을 알 수 없으면 원본을 그대로 반환한다.
 func expandHomePath(dsn string) string {
 	home, err := os.UserHomeDir()
@@ -178,11 +176,8 @@ func loadFile(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// injectSecrets 는 환경변수로 전달된 비밀 값을 주입한다(YAML 값보다 우선).
-//
-//	APP_AUTH_JWT_SECRET         → Auth.JWTSecret
-//	APP_DATABASE_DSN            → Database.DSN
-//	APP_AUTH_SEED_ADMIN_PASSWORD → Auth.SeedAdminPassword
+// injectSecrets 는 환경변수 비밀 값을 주입한다(YAML 값보다 우선).
+// APP_AUTH_JWT_SECRET/APP_DATABASE_DSN/APP_AUTH_SEED_ADMIN_PASSWORD/APP_ENCRYPTION_SECRET 등을 대응 필드로.
 func (c *Config) injectSecrets() {
 	if v := strings.TrimSpace(os.Getenv("APP_AUTH_JWT_SECRET")); v != "" {
 		c.Auth.JWTSecret = v

@@ -74,11 +74,8 @@ func claudeBuildSystem(msgs []domainllmprovider.ChatMessage) []anthropic.TextBlo
 	return []anthropic.TextBlockParam{{Text: strings.Join(systems, "\n\n")}}
 }
 
-// claudeBuildMessages 는 도메인 메시지를 Anthropic 메시지로 변환한다.
-//   - system 역할은 제외(top-level System 으로 분리됨).
-//   - tool 역할(결과)들은 연속 병합되어 하나의 user 메시지(tool_result 블록 배열)로,
-//   - assistant + ToolCalls 는 (선택적 text + ) tool_use 블록 배열의 assistant 메시지로,
-//   - 그 외 plain user/assistant 는 단순 텍스트 메시지로 재구성한다(멀티턴 루프 히스토리).
+// claudeBuildMessages 는 도메인 메시지를 Anthropic 메시지로 변환한다(멀티턴 히스토리).
+// system 은 제외(top-level System), 연속 tool 결과는 하나의 user(tool_result)로, assistant+ToolCalls 는 tool_use 블록 배열로 재구성한다.
 func claudeBuildMessages(msgs []domainllmprovider.ChatMessage) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(msgs))
 
@@ -199,9 +196,8 @@ func claudeToolInputSchema(raw []byte) anthropic.ToolInputSchemaParam {
 	return schema
 }
 
-// ChatStream 은 Anthropic Messages API 를 스트리밍으로 호출하고 응답 조각을 onChunk 로 전달한다.
-// 텍스트 델타는 즉시 onChunk(Delta) 로 보내고, tool_use 블록은 누적된 최종 메시지에서 추출해
-// 마지막 Done 조각에 담는다. onChunk 가 에러를 반환하면 스트리밍을 중단하고 그 에러를 반환한다.
+// ChatStream 은 Anthropic Messages API 를 스트리밍 호출해 텍스트 델타는 즉시 onChunk(Delta)로 보낸다.
+// tool_use 블록은 누적된 최종 메시지에서 추출해 마지막 Done 조각에 담는다(onChunk 에러 시 중단).
 func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
 	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
 	if apiKey == "" {

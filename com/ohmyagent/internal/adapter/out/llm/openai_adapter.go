@@ -22,10 +22,8 @@ const (
 	defaultOpenAIModel = "gpt-4o-mini"
 )
 
-// OpenAIAdapter 는 공식 OpenAI Go SDK(github.com/openai/openai-go/v3)를 사용해
-// Chat Completions API(스트리밍, function-calling)를 호출하는 어댑터다.
-//
-// 손작성 net/http 구현을 대체하며, SSE 파싱·재시도·인증 헤더는 SDK 에 위임한다.
+// OpenAIAdapter 는 OpenAI Go SDK 로 Chat Completions API(스트리밍, function-calling)를 호출하는 어댑터다.
+// SSE 파싱·재시도·인증 헤더는 SDK 에 위임한다.
 type OpenAIAdapter struct {
 	endpoint   string // 빈 문자열이면 SDK 기본(api.openai.com) 사용
 	model      string
@@ -77,10 +75,8 @@ func (a *OpenAIAdapter) newClient(apiKey string) openai.Client {
 
 // --- 도메인 → SDK 매핑 ---
 
-// buildOpenAIMessages 는 도메인 ChatMessage 슬라이스를 SDK 메시지 유니온으로 변환한다.
-//   - system / user: 단순 텍스트 메시지
-//   - assistant: 텍스트 + (있으면) tool_calls 를 함께 담는다(히스토리 재생용)
-//   - tool: ToolCallID 로 묶인 도구 실행 결과 메시지
+// buildOpenAIMessages 는 도메인 ChatMessage 를 SDK 메시지 유니온으로 변환한다.
+// system/user→텍스트, assistant→텍스트+tool_calls(히스토리 재생), tool→ToolCallID 로 묶인 실행 결과.
 func buildOpenAIMessages(msgs []domainllmprovider.ChatMessage) []openai.ChatCompletionMessageParamUnion {
 	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(msgs))
 	for _, m := range msgs {

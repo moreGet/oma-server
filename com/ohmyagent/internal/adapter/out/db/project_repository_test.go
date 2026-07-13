@@ -21,8 +21,8 @@ func TestProjectSyncRepositories(t *testing.T) {
 	require.NoError(t, RunMigrations(ctx, "sqlite", conn))
 
 	now := time.Unix(1000, 0).UTC()
-	pr := NewProjectRepository(conn)
-	cr := NewConversationRepository(conn)
+	pr := NewProjectRepository(conn, "sqlite")
+	cr := NewConversationRepository(conn, "sqlite")
 
 	// 프로젝트 업서트(INSERT) → 같은 client_id 재전송 시 같은 서버 id(UPDATE).
 	p1, err := pr.UpsertProject(ctx, domainproject.Project{ID: "p-uuid", OwnerID: "u1", ClientID: "c1", Name: "Proj", CreatedUTC: now, UpdatedUTC: now})

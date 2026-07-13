@@ -164,12 +164,8 @@ type MemberPolicyRepository interface {
 	Delete(ctx context.Context, memberID string) error
 }
 
-// ResolveEffective 는 전역 정책과 멤버 오버라이드를 계층 병합해 유효 정책을 만든다.
-// 정책: 전역=보안 하한 — 모드는 전역 전용, 차단은 전역∪멤버(멤버는 추가 차단만),
-// 허용 화이트리스트는 멤버가 좁히기만 가능(둘 다 지정 시 교집합).
-//
-//	disabled = union(global.Disabled, member.Disabled)
-//	enabled  = both empty → nil(전체 허용) / 한쪽만 → 그쪽 / 둘 다 → intersection(global, member)
+// ResolveEffective 는 전역 정책과 멤버 오버라이드를 계층 병합한다(전역=보안 하한).
+// 모드는 전역 전용, disabled=전역∪멤버(추가 차단만), enabled=둘 다 비면 nil / 한쪽만 그쪽 / 둘 다면 교집합.
 func ResolveEffective(global Settings, member *MemberPolicy) (mode string, enabled, disabled []string) {
 	mode = NormMode(global.Mode)
 	if member == nil || member.IsEmpty() {

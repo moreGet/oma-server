@@ -131,9 +131,7 @@ func (h *ProviderHandler) Test(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
 // DTO (snake_case, gin binding 태그 → 커맨드 Validate 로 대체)
-// ---------------------------------------------------------------------------
 
 type providerConfigDTO struct {
 	Endpoint  string `json:"endpoint,omitempty"`

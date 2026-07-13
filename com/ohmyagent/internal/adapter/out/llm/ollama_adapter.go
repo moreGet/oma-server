@@ -22,8 +22,7 @@ const (
 	defaultOllamaModel = "llama3"
 )
 
-// OllamaAdapter 는 LOCAL provider 용 어댑터다.
-// 공식 Ollama Go SDK(github.com/ollama/ollama/api)의 Chat 스트리밍 API 를 사용한다.
+// OllamaAdapter 는 Ollama Go SDK 의 Chat 스트리밍 API 를 쓰는 LOCAL provider 어댑터다.
 // 로컬 LLM 이므로 API 키는 사용하지 않는다.
 type OllamaAdapter struct {
 	endpoint   string       // 사용자 지정 엔드포인트("" 이면 환경변수/기본값)
@@ -53,8 +52,7 @@ func (a *OllamaAdapter) resolveModel(reqModel string) string {
 }
 
 // newOllamaClient 는 어댑터 설정에 맞는 SDK 클라이언트를 만든다.
-//   - endpoint 가 지정되면 해당 URL 로 api.NewClient 를 만든다.
-//   - 비어 있으면 api.ClientFromEnvironment 로 OLLAMA_HOST(기본 http://localhost:11434)를 사용한다.
+// endpoint 가 있으면 그 URL 로, 없으면 ClientFromEnvironment(OLLAMA_HOST, 기본 http://localhost:11434)로 만든다.
 func (a *OllamaAdapter) newOllamaClient() (*api.Client, error) {
 	hc := a.httpClient
 	if hc == nil {
@@ -74,10 +72,8 @@ func (a *OllamaAdapter) newOllamaClient() (*api.Client, error) {
 	return client, nil
 }
 
-// buildOllamaMessages 는 도메인 메시지를 SDK 메시지로 변환한다.
-//   - assistant + ToolCalls: 모델이 만든 도구 호출을 히스토리로 재생한다.
-//     도메인 Arguments(JSON 문자열)를 SDK 의 ToolCallFunctionArguments 로 역직렬화한다.
-//   - tool 역할: 도구 실행 결과. Ollama 는 role="tool" 을 사용하며 ToolName/ToolCallID 로 어떤 호출의 결과인지 식별한다.
+// buildOllamaMessages 는 도메인 메시지를 SDK 메시지로 변환한다(assistant+ToolCalls 는 히스토리 재생용).
+// tool 역할은 role="tool"+ToolName/ToolCallID 로 실행 결과를 식별한다.
 func buildOllamaMessages(msgs []domainllmprovider.ChatMessage) ([]api.Message, error) {
 	out := make([]api.Message, 0, len(msgs))
 	for _, m := range msgs {
@@ -105,9 +101,8 @@ func buildOllamaMessages(msgs []domainllmprovider.ChatMessage) ([]api.Message, e
 	return out, nil
 }
 
-// decodeOllamaToolArguments 는 도메인 Arguments(JSON 문자열)를 SDK 의
-// ToolCallFunctionArguments(불투명 ordered-map 타입)로 변환한다.
-// ToolCallFunctionArguments 는 UnmarshalJSON 을 구현하므로 json.Unmarshal 로 채울 수 있다.
+// decodeOllamaToolArguments 는 Arguments(JSON 문자열)를 SDK 의 ToolCallFunctionArguments 로 변환한다.
+// 이 타입은 UnmarshalJSON 을 구현하므로 json.Unmarshal 로 채울 수 있다.
 func decodeOllamaToolArguments(arguments string) (api.ToolCallFunctionArguments, error) {
 	args := api.NewToolCallFunctionArguments()
 	raw := arguments
@@ -161,13 +156,8 @@ func encodeOllamaToolArguments(args api.ToolCallFunctionArguments) string {
 	return string(b)
 }
 
-// ChatStream 은 공식 SDK 의 Chat 을 stream=true 로 호출하고 응답 조각을 onChunk 로 전달한다.
-//
-// 동작 계약:
-//   - 콜백에서 들어오는 각 청크의 텍스트(Content)는 즉시 onChunk(Delta) 로 흘려보낸다.
-//     onChunk 가 에러를 반환하면 그 에러를 콜백에서 반환해 스트리밍을 중단한다.
-//   - 도구 호출(ToolCalls)과 완료 메타(DoneReason/usage)는 콜백 내부에서 누적만 한다.
-//   - client.Chat 은 스트림이 끝날 때까지 블로킹하므로, 반환된 뒤에 Done=true 최종 조각을 정확히 1회 전송한다.
+// ChatStream 은 SDK Chat 을 stream=true 로 호출해 각 청크 텍스트는 즉시 onChunk(Delta)로 흘리고 ToolCalls/DoneReason/usage 는 누적한다.
+// client.Chat 은 블로킹이므로 반환 후 Done=true 최종 조각을 정확히 1회 전송한다(onChunk 에러 시 중단).
 func (a *OllamaAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
 	client, err := a.newOllamaClient()
 	if err != nil {

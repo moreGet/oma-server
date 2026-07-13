@@ -110,7 +110,9 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 		if usage != nil {
 			total = usage.TotalTokens
 		}
-		h.quota.Add(r.Context(), claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
+		ctx, cancel := accountingCtx(r)
+		h.quota.Add(ctx, claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
+		cancel()
 	}
 
 	// 이벤트가 전혀 없던 경우에도 SSE 형태 유지(message_start 만이라도).
@@ -191,9 +193,7 @@ func writeAgentEvent(w http.ResponseWriter, ev domainagent.Event) error {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // DTO (snake_case)
-// ---------------------------------------------------------------------------
 
 type agentAttachmentDTO struct {
 	FileName    string `json:"file_name"`

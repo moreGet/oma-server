@@ -52,11 +52,8 @@ func (rec *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
 }
 
-// loggingMiddleware 는 요청을 구조화 로깅한다.
-//   - 헬스 체크는 로그에서 제외(고빈도 폴링 노이즈 절감).
-//   - request_id 를 부여/전파(X-Request-Id)하여 클라이언트~서버 로그 상관관계 확보.
-//   - 상태/지연에 따라 레벨 분기(5xx=Error, 4xx 또는 느린 요청=Warn, 그 외 Info).
-//   - 응답 바이트·정규화된 클라이언트 IP 등 운영에 유의미한 필드 포함.
+// loggingMiddleware 는 요청을 구조화 로깅한다(헬스 체크 제외, request_id 부여/전파로 로그 상관관계 확보).
+// 상태/지연으로 레벨 분기(5xx=Error, 4xx·느린 요청=Warn, 그 외 Info)하고 응답 바이트·클라이언트 IP 를 남긴다.
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == healthPath {

@@ -18,6 +18,7 @@ const (
 	wsPongWait       = 60 * time.Second
 	wsPingPeriod     = (wsPongWait * 9) / 10
 	wsMaxMessageSize = 64 * 1024
+	wsOpTimeout      = 5 * time.Second // 인바운드 처리(DB) 작업당 데드라인
 )
 
 // chatWSUpgrader: 인증은 Bearer(SecureRouter)로 끝났으므로 Origin 검사는 허용(주 클라이언트는 C#).
@@ -69,7 +70,9 @@ func (h *ChatWSHandler) Serve(w http.ResponseWriter, r *http.Request) error {
 // readPump 는 클라이언트 인바운드를 읽어 메시지를 중계한다. 종료 시 연결 해제(presence offline).
 func (h *ChatWSHandler) readPump(conn *websocket.Conn, client *messagingapp.Client, memberID string) {
 	defer func() {
-		h.svc.Disconnect(context.Background(), client)
+		ctx, cancel := context.WithTimeout(context.Background(), wsOpTimeout)
+		defer cancel()
+		h.svc.Disconnect(ctx, client)
 		_ = conn.Close()
 	}()
 	conn.SetReadLimit(wsMaxMessageSize)
@@ -89,7 +92,10 @@ func (h *ChatWSHandler) readPump(conn *websocket.Conn, client *messagingapp.Clie
 		}
 		switch in.Type {
 		case "send":
-			if _, err := h.svc.SendMessage(context.Background(), memberID, in.RoomID, in.Content, in.Mentions, in.Attachments); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), wsOpTimeout)
+			_, err := h.svc.SendMessage(ctx, memberID, in.RoomID, in.Content, in.Mentions, in.Attachments)
+			cancel()
+			if err != nil {
 				// 발신자에게만 오류 통지(브로드캐스트는 안 함).
 				if b, mErr := json.Marshal(wsErrorEvent{Type: "error", Error: messagingErr(err).Error()}); mErr == nil {
 					select {
@@ -100,7 +106,9 @@ func (h *ChatWSHandler) readPump(conn *websocket.Conn, client *messagingapp.Clie
 			}
 		case "typing":
 			// 휘발성: 실패해도 무시(타이핑 신호는 best-effort).
-			_ = h.svc.Typing(context.Background(), memberID, in.RoomID, in.State)
+			ctx, cancel := context.WithTimeout(context.Background(), wsOpTimeout)
+			_ = h.svc.Typing(ctx, memberID, in.RoomID, in.State)
+			cancel()
 		}
 	}
 }

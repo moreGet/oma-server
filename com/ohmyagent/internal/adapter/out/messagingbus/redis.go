@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+// publishTimeout 은 Broadcast 의 Redis publish 최대 대기다(느린 Redis 가 요청 고루틴을 블록하지 않게).
+const publishTimeout = 2 * time.Second
 
 // envelope 는 채널에 publish 되는 메시지다(대상 멤버 + 이벤트 페이로드).
 type envelope struct {
@@ -17,10 +21,8 @@ type envelope struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// RedisBroadcaster 는 이벤트를 Redis 채널로 publish 하고, 구독해서 받은 이벤트를
-// 로컬 전달 함수(deliver, 보통 hub.SendToMembers)로 이 인스턴스의 연결에 전달한다.
-// 모든 인스턴스가 같은 채널을 구독하므로, publish 한 인스턴스 자신도 구독으로 받아 로컬 전달한다
-// (이중 전달 없음 — publish 측은 로컬 전달을 직접 하지 않는다).
+// RedisBroadcaster 는 이벤트를 Redis 채널로 publish 하고, 구독으로 받은 이벤트를 로컬 전달 함수(deliver, 보통 hub.SendToMembers)로 전달한다.
+// 모든 인스턴스가 같은 채널을 구독하며 publish 측은 로컬 전달을 직접 하지 않아 이중 전달이 없다.
 type RedisBroadcaster struct {
 	rdb     *redis.Client
 	channel string
@@ -76,7 +78,9 @@ func (b *RedisBroadcaster) Broadcast(memberIDs []string, payload []byte) {
 	if err != nil {
 		return
 	}
-	if err := b.rdb.Publish(context.Background(), b.channel, data).Err(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
+	defer cancel()
+	if err := b.rdb.Publish(ctx, b.channel, data).Err(); err != nil {
 		slog.Warn("messagingbus: publish failed", "error", err)
 	}
 }

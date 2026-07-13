@@ -241,9 +241,7 @@ func (h *AuthHandler) ListRoles(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
 // DTO (snake_case, PasswordHash 노출 금지). messageResp 는 llmprovider_handler.go 에 정의됨.
-// ---------------------------------------------------------------------------
 
 type changePasswordReq struct {
 	OldPassword string `json:"old_password"`

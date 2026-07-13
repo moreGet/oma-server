@@ -46,7 +46,6 @@ func TestResolveEffective(t *testing.T) {
 
 func TestCatalog(t *testing.T) {
 	assert.Len(t, ClientTools, 26)
-	assert.Len(t, ClientToolNames(), 26)
 	assert.Equal(t, "run_command", ClientTools[0].Name)
 	assert.True(t, IsKnownTool("read_document"))
 	assert.False(t, IsKnownTool("chat_send"))

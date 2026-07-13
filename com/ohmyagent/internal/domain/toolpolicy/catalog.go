@@ -86,15 +86,6 @@ var ClientTools = []CatalogEntry{
 	{ToolReadDocument, CategoryDocument},
 }
 
-// ClientToolNames 는 ClientTools 의 도구명만 등록 순서대로 추린 슬라이스다.
-func ClientToolNames() []string {
-	names := make([]string, 0, len(ClientTools))
-	for _, t := range ClientTools {
-		names = append(names, t.Name)
-	}
-	return names
-}
-
 // IsKnownTool 은 도구명이 카탈로그에 존재하는지 반환한다(정책 입력 검증용).
 func IsKnownTool(name string) bool {
 	for _, t := range ClientTools {

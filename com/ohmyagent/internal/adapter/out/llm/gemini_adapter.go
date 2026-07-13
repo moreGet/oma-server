@@ -20,11 +20,8 @@ const (
 	defaultGeminiModel = "gemini-1.5-flash"
 )
 
-// GeminiAdapter 는 공식 Google Gen AI Go SDK(google.golang.org/genai)를 사용하는
-// Gemini API 어댑터다. 스트리밍 생성과 function-calling 을 지원한다.
-//
-// 주의: 클라이언트는 ChatStream 호출마다 생성한다. API 키는 환경변수에서 매 호출 시 읽으므로
-// 어댑터 인스턴스는 키 값을 보관하지 않는다(보안 + 키 회전 대응).
+// GeminiAdapter 는 Google Gen AI Go SDK 로 스트리밍 생성과 function-calling 을 지원하는 Gemini 어댑터다.
+// 클라이언트는 ChatStream 호출마다 생성하고 API 키는 매 호출 시 읽는다(키 회전 대응).
 type GeminiAdapter struct {
 	endpoint   string // 현재 Gemini Developer 백엔드에서는 사용하지 않음(미래 확장/문서화 목적 보존)
 	model      string
@@ -61,10 +58,8 @@ func (a *GeminiAdapter) resolveGeminiModel(reqModel string) string {
 	return defaultGeminiModel
 }
 
-// ChatStream 은 Gemini GenerateContentStream 을 호출하고 응답 조각을 onChunk 로 전달한다.
-// 텍스트 델타는 도착하는 즉시 흘려보내고, FunctionCall 파트는 누적했다가 마지막 Done 조각에 담는다.
-//
-// onChunk 가 에러를 반환하면 즉시 스트리밍을 중단하고 그 에러를 그대로 반환한다(마지막 Done 조각도 보내지 않음).
+// ChatStream 은 GenerateContentStream 을 호출해 텍스트 델타는 즉시 onChunk 로 흘리고, FunctionCall 은 누적해 마지막 Done 조각에 담는다.
+// onChunk 가 에러를 반환하면 즉시 중단하고 그 에러를 그대로 반환한다.
 func (a *GeminiAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
 	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
 	if apiKey == "" {
@@ -177,18 +172,8 @@ func (a *GeminiAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 	})
 }
 
-// geminiBuildContents 는 도메인 메시지를 Gemini Content 슬라이스로 변환하고,
-// system 메시지를 모아 SystemInstruction(Content)으로 분리해 반환한다.
-//
-// 역할 매핑:
-//   - system    → SystemInstruction 의 텍스트 파트로 누적(개행으로 join)
-//   - user      → role "user" + 텍스트 파트
-//   - assistant → role "model" + 텍스트 파트, ToolCalls 가 있으면 FunctionCall 파트(Name + Args)
-//   - tool      → role "user" + FunctionResponse 파트(함수 결과). Gemini 는 별도 "tool" role 이 없고
-//     function-response 파트를 user 턴으로 보낸다.
-//
-// 도구 결과의 함수명(Name) 결정 순서: message.Name → ToolCallID 로 직전 assistant ToolCalls 에서 역매핑 →
-// 둘 다 없으면 빈 문자열(SDK 가 거부할 수 있으나 도메인 입력 문제이므로 그대로 전달).
+// geminiBuildContents 는 도메인 메시지를 Gemini Content 로 변환하고 system 은 SystemInstruction 으로 분리한다.
+// 역할: system→SystemInstruction, user→"user", assistant→"model"(+FunctionCall), tool→"user"+FunctionResponse. 함수명은 message.Name→ToolCallID 역매핑 순으로 정한다.
 func geminiBuildContents(msgs []domainllmprovider.ChatMessage) (contents []*genai.Content, systemInstruction *genai.Content) {
 	var systemParts []string
 

@@ -120,7 +120,9 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		if usage != nil {
 			total = usage.TotalTokens
 		}
-		h.quota.Add(r.Context(), claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
+		ctx, cancel := accountingCtx(r)
+		h.quota.Add(ctx, claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
+		cancel()
 	}
 
 	// 조각이 하나도 없던 경우에도 SSE 응답 형태를 유지한다.
@@ -132,6 +134,11 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 		_ = rc.Flush()
 	}
 	return nil
+}
+
+// accountingCtx 는 요청 취소와 분리된 회계용 컨텍스트다(스트림 완료 후 클라이언트 종료에도 사용량 기록 보장).
+func accountingCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 }
 
 // recordChat 은 chat.request 감사 이벤트(메타데이터, 본문 없음)를 남기고

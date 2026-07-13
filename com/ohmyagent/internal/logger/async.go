@@ -18,8 +18,7 @@ type logItem struct {
 }
 
 // asyncSink 는 파생 핸들러들이 공유하는 비동기 상태(채널·워커·드롭 카운터)다.
-// mu/closed 로 Handle 의 채널 send 와 Close 의 채널 close 를 안전하게 직렬화한다
-// (종료 후 로그는 동기 직접 기록으로 폴백 — "send on closed channel" 패닉 방지).
+// mu/closed 로 Handle 의 send 와 Close 의 close 를 직렬화한다(종료 후 동기 폴백, send-on-closed 패닉 방지).
 type asyncSink struct {
 	ch      chan logItem
 	dropped atomic.Uint64
@@ -28,9 +27,8 @@ type asyncSink struct {
 	closed  bool
 }
 
-// asyncHandler 는 레코드를 버퍼 채널에 비차단으로 넣고, 백그라운드 워커가 inner 핸들러로 기록한다.
-// 요청 핫패스에서 로그 포맷팅/쓰기 블로킹과 JSONHandler 의 직렬화 mutex 경합을 제거한다
-// (고동접 latency 보호). 버퍼가 가득 차면 레코드를 드롭하고 카운터를 올린다.
+// asyncHandler 는 레코드를 버퍼 채널에 비차단으로 넣고 백그라운드 워커가 inner 로 기록한다(핫패스 로그 블로킹/직렬화 mutex 경합 제거).
+// 버퍼가 가득 차면 레코드를 드롭하고 카운터를 올린다.
 type asyncHandler struct {
 	inner slog.Handler
 	sink  *asyncSink

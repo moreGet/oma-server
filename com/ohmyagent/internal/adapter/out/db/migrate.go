@@ -27,8 +27,7 @@ func RunMigrations(ctx context.Context, driver string, conn *sql.DB) error {
 }
 
 // ResetMigrations 는 모든 마이그레이션을 0 까지 Down(drop) 한 뒤 다시 Up(create) 한다.
-// 매 기동마다 깨끗한 스키마를 보장하는 파괴적 연산이므로, 로컬 개발 환경에서만 호출한다
-// (main.go 의 cfg.ResetsDatabase() 게이트). 최초 기동(미적용 상태)에서는 Down 이 no-op 이다.
+// 파괴적 연산이므로 로컬 개발 환경에서만 호출한다(main.go 의 cfg.ResetsDatabase() 게이트).
 func ResetMigrations(ctx context.Context, driver string, conn *sql.DB) error {
 	provider, err := newProvider(driver, conn)
 	if err != nil {
@@ -44,8 +43,7 @@ func ResetMigrations(ctx context.Context, driver string, conn *sql.DB) error {
 }
 
 // newProvider 는 임베드된 마이그레이션 FS 로 goose Provider 를 구성한다.
-// 주의: provider.Close() 는 넘긴 *sql.DB 를 닫는다. conn 수명은 main.go(조립 루트)가
-// 소유하므로 여기서 Close 하지 않는다.
+// 주의: provider.Close() 는 넘긴 *sql.DB 를 닫으므로 여기서 Close 하지 않는다(conn 수명은 main.go 소유).
 func newProvider(driver string, conn *sql.DB) (*goose.Provider, error) {
 	dialect, err := gooseDialect(driver)
 	if err != nil {

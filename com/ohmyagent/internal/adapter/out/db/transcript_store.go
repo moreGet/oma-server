@@ -38,8 +38,7 @@ var (
 )
 
 // TranscriptStore 는 대화 이력을 chat_transcripts 테이블에 저장한다(domaintranscript.Store 구현).
-// 본문(요청+응답)은 JSON 으로 직렬화 후 gzip 압축하여 content BLOB 에 보관하고,
-// 조회/보존용 메타데이터(member/model/tokens/created_at)는 별도 컬럼에 둔다.
+// 본문(요청+응답)은 JSON 직렬화 후 gzip 압축해 content BLOB 에, 조회/보존용 메타데이터는 별도 컬럼에 둔다.
 type TranscriptStore struct {
 	db *sql.DB
 }

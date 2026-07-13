@@ -25,10 +25,7 @@ const (
 )
 
 // Open 은 driver/dsn 으로 *sql.DB 를 열고 풀을 설정한다.
-//   - sqlite: 단일 writer 이므로 MaxOpenConns=1(락 충돌 방지).
-//   - mysql:  maxOpenConns 인자 적용(<=0 이면 기본 10).
-//
-// modernc.org/sqlite 의 database/sql 드라이버명은 "sqlite" 이다.
+// sqlite→MaxOpenConns=1(단일 writer, 락 충돌 방지), mysql→maxOpenConns(<=0 이면 기본 10).
 func Open(driver, dsn string, maxOpenConns int) (*sql.DB, error) {
 	driverName, err := sqlDriverName(driver)
 	if err != nil {

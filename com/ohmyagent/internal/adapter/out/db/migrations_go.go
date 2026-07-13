@@ -8,10 +8,8 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// 버전 10/11 은 **조건부(idempotent) Go 마이그레이션**이다.
-// 과거에 일부 마이그레이션이 in-place 수정되어, DB 마다 해당 컬럼이 있을 수도/없을 수도 있다
-// (예: 편집된 00006 적용 → retention_days 존재, 원본 00007 적용 → daily_limit 부재).
-// 따라서 ALTER 전에 컬럼 존재를 확인해 누락분만 추가한다(중복 컬럼 에러 방지).
+// 버전 10/11 은 조건부(idempotent) Go 마이그레이션이다. 과거 in-place 수정으로 DB 마다 컬럼이 있을 수도/없을 수도 있어,
+// ALTER 전에 컬럼 존재를 확인해 누락분만 추가한다(중복 컬럼 에러 방지).
 
 // goMigrations 는 driver(sqlite|mysql)에 맞춘 Go 마이그레이션 목록을 반환한다.
 func goMigrations(driver string) []*goose.Migration {

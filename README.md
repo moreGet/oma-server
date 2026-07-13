@@ -74,7 +74,7 @@ APP_ENV=local go run ./com/ohmyagent/cmd/api
 
 ### 5) 어드민 콘솔
 브라우저에서 **`http://localhost:8080/admin/login`** → `admin` / `admin`(로컬 기본) 로 로그인.
-대시보드·멤버 관리(역할·토큰/세션 한도·**멤버별 도구 정책 오버라이드**)·Provider 관리·대화 이력·세션 저장·**도구 정책(`/admin/tools`, 전역 + 카탈로그 카테고리 리스트)**·**클라이언트 버전(`/admin/client`)**·**채팅 관리/모더레이션(`/admin/chat`)**·내 계정 페이지 제공(사이드바는 섹션별 접이식 메뉴).
+대시보드·멤버 관리(역할·토큰/세션 한도·**멤버별 도구 정책 오버라이드**)·**Provider 관리(admin↑ 전용 — 비관리자는 Provider 메뉴 숨김·페이지 접근 시 대시보드로 리다이렉트)**·대화 이력·세션 저장·**도구 정책(`/admin/tools`, 전역 + 카탈로그 카테고리 리스트)**·**클라이언트 버전(`/admin/client`)**·**채팅 관리/모더레이션(`/admin/chat`)**·내 계정 페이지 제공(사이드바는 섹션별 접이식 메뉴).
 
 > ⚠️ `/admin`(끝 슬래시 없음)은 매칭되지 않을 수 있으니 `/admin/login` 또는 `/admin/`으로 접속.
 
@@ -140,6 +140,7 @@ API 키는 **둘 중 하나**로 등록:
 - **SSE 쓰기 핫패스**: chat/agent 스트리밍의 이벤트 프레이밍(`data:`/`event:`)을 `fmt.Fprintf`(리플렉션 포맷 + 포맷 문자열 할당) 대신 **`sync.Pool` 버퍼**에 직접 조립해 1회 `Write` 한다 — 토큰당 할당을 제거(고동접 스트리밍 GC 압력 완화). 토큰별 flush 는 유지(저지연).
 - **DB 풀**: `MaxIdleConns` 를 `MaxOpenConns` 와 동일하게(`database/sql` 기본값 2 대신) 설정해 부하 시 커넥션 open/close churn 을 제거하고, `ConnMaxLifetime`(30m)·`ConnMaxIdleTime`(5m)로 스테일 커넥션을 정리한다. sqlite 는 단일 writer 라 1, mysql 풀 크기는 `max_open_conns`(설정 미지정 시 10)로 조정.
 - **채팅 멘션 피드 인덱스**: `GET /chat/mentions` 는 방 필터 없이 `created_at DESC` 정렬+LIMIT 하므로 `chat_messages(created_at)` 인덱스로 전체 스캔+filesort 를 제거(인덱스 순서 스캔 + 조기 LIMIT 종료).
+- **멤버 목록 인덱스**: 어드민 `GET /admin/members` 는 `created_at DESC` 정렬+LIMIT/OFFSET 하므로 `idx_members_created_at`(`members(created_at)`, 마이그레이션 00022) 로 테이블 전체 filesort 를 제거(멤버 수가 커져도 인덱스 순서 스캔).
 - **토큰 쿼터 핫패스**(대규모 동접 채팅): chat/agent 요청마다 일·주·월 사용량을 윈도우별 개별 조회 대신 **IN 절 단일 쿼리**(`UsageForPeriods`)로 묶고(시행 `Check`·조회 `/me/quota`), 응답 후 누적도 **멀티로우 upsert 단일 쿼리**(`AddUsage`)로 묶어 채팅당 쿼터 DB 왕복을 절반 이하로 줄인다. 무제한(한도 0) 윈도우는 조회 자체를 생략. 토큰 추정 폴백 텍스트(대화 전체 연결)는 **usage 미제공 시에만 지연 생성**(정상 경로 할당 회피).
 - **LLM 업스트림**: 모든 외부 어댑터가 **공유 HTTP 클라이언트**(Transport `MaxIdleConns=256`·`MaxIdleConnsPerHost=64`, HTTP/2)로 OpenAI/Claude/Gemini 커넥션을 재사용(기본 2 병목 제거). 전역 타임아웃 없이 ctx 로 취소(SSE 장기 스트리밍 보존).
 - **활성 Provider 캐시**: 질의마다 DB 조회 없이 `atomic.Value` 캐시에서 활성 Provider 해석.

@@ -6,26 +6,50 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"sync/atomic"
 	"time"
 
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
 )
+
+// defaultLimitsTTL 은 전역 기본한도 캐시 수명이다(핫패스 쿼리 제거 + 다중 인스턴스 전파 상한).
+const defaultLimitsTTL = 30 * time.Second
 
 // accessGate 는 admin 인가 게이트다(auth 도메인 직접 import 회피).
 type accessGate interface {
 	RequireAdmin(ctx context.Context, actorID string) error
 }
 
+// cachedLimits 는 만료 시각과 함께 캐시된 전역 기본한도다.
+type cachedLimits struct {
+	limits  domainquota.Limits
+	expires time.Time
+}
+
 // Service 는 토큰 쿼터 시행/관리 서비스다.
 type Service struct {
-	repo domainquota.Repository
-	gate accessGate
-	now  func() time.Time
+	repo     domainquota.Repository
+	gate     accessGate
+	now      func() time.Time
+	defCache atomic.Pointer[cachedLimits]
 }
 
 // NewService 는 Service 를 생성한다.
 func NewService(repo domainquota.Repository, gate accessGate) *Service {
 	return &Service{repo: repo, gate: gate, now: time.Now}
+}
+
+// defaultLimits 는 전역 기본한도를 TTL 캐시로 반환한다(만료 시 재조회). 캐시 미스는 정확성 무해.
+func (s *Service) defaultLimits(ctx context.Context) (domainquota.Limits, error) {
+	if c := s.defCache.Load(); c != nil && s.now().Before(c.expires) {
+		return c.limits, nil
+	}
+	l, err := s.repo.DefaultLimits(ctx)
+	if err != nil {
+		return domainquota.Limits{}, err
+	}
+	s.defCache.Store(&cachedLimits{limits: l, expires: s.now().Add(defaultLimitsTTL)})
+	return l, nil
 }
 
 // Check 는 일/주/월 중 하나라도 한도를 이미 초과했으면 ErrExceeded 를 반환한다(스트리밍 시작 전).
@@ -88,7 +112,7 @@ func (s *Service) effectiveLimits(ctx context.Context, memberID string) (domainq
 	if err != nil {
 		return domainquota.Limits{}, err
 	}
-	def, err := s.repo.DefaultLimits(ctx)
+	def, err := s.defaultLimits(ctx)
 	if err != nil {
 		return domainquota.Limits{}, err
 	}
@@ -190,7 +214,11 @@ func (s *Service) SetDefaultLimits(ctx context.Context, actorID string, l domain
 	if err := s.gate.RequireAdmin(ctx, actorID); err != nil {
 		return err
 	}
-	return s.repo.SetDefaultLimits(ctx, clamp(l))
+	if err := s.repo.SetDefaultLimits(ctx, clamp(l)); err != nil {
+		return err
+	}
+	s.defCache.Store(nil) // 즉시 재조회 유도
+	return nil
 }
 
 // ResetUsage 는 멤버의 사용량을 초기화한다(admin↑).

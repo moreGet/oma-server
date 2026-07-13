@@ -1,6 +1,5 @@
-// Command api 는 OhMyAgent AI Agent 서버의 조립 루트(DI)다.
-// 비즈니스 로직 금지: config 로드 → 어댑터 생성 → 유스케이스 주입 → 핸들러 → 라우트 등록
-// → 미들웨어 체인 → graceful shutdown 만 수행한다(스펙 §3.7).
+// Command api 는 OhMyAgent AI Agent 서버의 조립 루트(DI)다(스펙 §3.7).
+// 비즈니스 로직 금지: config→어댑터→유스케이스→핸들러→라우트→미들웨어→graceful shutdown 만 수행.
 package main
 
 import (
@@ -147,7 +146,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	projectService := projectapp.NewService(dbout.NewProjectRepository(conn), dbout.NewConversationRepository(conn), sessionManager, sessionManager.EffectiveMaxSessions)
+	projectService := projectapp.NewService(dbout.NewProjectRepository(conn, cfg.Database.Driver), dbout.NewConversationRepository(conn, cfg.Database.Driver), sessionManager, sessionManager.EffectiveMaxSessions)
 	// 사용자 간 실시간 채팅(단체/1:1): RDB 영속 + 인메모리 브로드캐스트 허브(단일 인스턴스).
 	messagingHub := messagingapp.NewHub()
 	messagingBroadcaster, err := buildBroadcaster(cfg, messagingHub, log)
@@ -325,12 +324,8 @@ func run() error {
 	}
 }
 
-// ensureSuperAdmin 은 super_admin 이 하나도 없으면 항상(모든 환경) 생성한다.
-// 비밀번호: env(APP_AUTH_SEED_ADMIN_PASSWORD) 우선, 없으면 랜덤 생성 후 1회 경고 로그.
-// 실패는 로깅만 하고 기동을 막지 않는다.
 // buildBroadcaster 는 설정에 따라 채팅 이벤트 전파 방식을 만든다.
-//   - memory(기본): 단일 인스턴스 로컬 허브.
-//   - redis: 다중 인스턴스 pub/sub(접속 실패 시 기동 중단 — 운영자가 명시 선택했으므로).
+// memory(기본)=단일 인스턴스 로컬 허브, redis=다중 인스턴스 pub/sub(접속 실패 시 기동 중단).
 func buildBroadcaster(cfg *config.Config, hub *messagingapp.Hub, log *slog.Logger) (messagingapp.Broadcaster, error) {
 	if !cfg.UsesRedisBroadcaster() {
 		log.Info("chat broadcaster: memory (single instance)")
@@ -359,6 +354,8 @@ func buildBroadcaster(cfg *config.Config, hub *messagingapp.Hub, log *slog.Logge
 	return bc, nil
 }
 
+// ensureSuperAdmin 은 super_admin 이 없으면 항상(모든 환경) 생성한다(비밀번호는 env 우선, 없으면 랜덤 생성 후 1회 경고).
+// 실패는 로깅만 하고 기동을 막지 않는다.
 func ensureSuperAdmin(
 	ctx context.Context,
 	log *slog.Logger,

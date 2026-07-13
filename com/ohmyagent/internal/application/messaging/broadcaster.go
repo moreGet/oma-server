@@ -1,10 +1,7 @@
 package messagingapp
 
-// Broadcaster 는 실시간 이벤트를 대상 멤버들에게 팬아웃한다.
-//   - LocalBroadcaster: 이 인스턴스의 허브로 직접 전달(단일 인스턴스).
-//   - Redis 등 pub/sub 구현: 모든 인스턴스로 전파 후 각 인스턴스가 로컬 허브로 전달(다중 인스턴스).
-//
-// 서비스는 이 포트만 호출하므로, 전송 방식(memory/redis)을 설정으로 교체할 수 있다.
+// Broadcaster 는 실시간 이벤트를 대상 멤버들에게 팬아웃한다(전송 방식 memory/redis 를 설정으로 교체 가능).
+// Local: 이 인스턴스 허브로 직접 전달. pub/sub: 전 인스턴스로 전파 후 각자 로컬 허브로 전달.
 type Broadcaster interface {
 	// Broadcast 는 payload(JSON 이벤트)를 memberIDs 의 연결로 전달한다(비차단·best-effort).
 	Broadcast(memberIDs []string, payload []byte)

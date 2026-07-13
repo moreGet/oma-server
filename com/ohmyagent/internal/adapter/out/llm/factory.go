@@ -12,11 +12,8 @@ import (
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
 
-// newSharedHTTPClient 는 LLM 업스트림 호출용 공유 HTTP 클라이언트를 만든다.
-// 어댑터 인스턴스는 요청마다 새로 생성되지만 이 클라이언트(=Transport 커넥션 풀)를 공유하여
-// 업스트림(OpenAI/Claude/Gemini)으로의 TCP/TLS 커넥션을 재사용한다 — 고동접 N/W IO 의 핵심.
-// 기본 Transport 의 MaxIdleConnsPerHost=2 병목을 제거한다. 전역 타임아웃은 두지 않는다
-// (스트리밍이 길 수 있어 취소는 ctx 로 제어).
+// newSharedHTTPClient 는 업스트림 TCP/TLS 커넥션을 재사용하는 공유 HTTP 클라이언트를 만든다(기본 Transport 의 MaxIdleConnsPerHost=2 병목 제거).
+// 전역 타임아웃은 두지 않는다(스트리밍이 길 수 있어 취소는 ctx 로 제어).
 func newSharedHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
@@ -44,10 +41,7 @@ func resolveAPIKey(apiKey, apiKeyEnv string) string {
 	return ""
 }
 
-// EXTERNAL Provider 를 모델명 접두사로 어댑터에 분기한다.
-//   - claude* → ClaudeAdapter (Anthropic, 예: claude-3-5-sonnet-latest)
-//   - gemini* → GeminiAdapter (Google, 예: gemini-1.5-flash)
-//   - 그 외   → OpenAIAdapter (기본 외부 모델)
+// EXTERNAL Provider 를 모델명 접두사로 어댑터에 분기한다(claude*→Claude, gemini*→Gemini, 그 외→OpenAI).
 const (
 	claudeModelPrefix = "claude"
 	geminiModelPrefix = "gemini"
@@ -65,13 +59,8 @@ type Factory struct {
 // NewFactory 는 Factory 구현체를 반환한다(공유 HTTP 클라이언트 1회 생성).
 func NewFactory() *Factory { return &Factory{httpClient: newSharedHTTPClient()} }
 
-// CreateAdapter 는 provider.ProviderType 에 따라 적절한 어댑터를 생성한다.
-//
-// 분기 규칙:
-//   - LOCAL    → OllamaAdapter
-//   - EXTERNAL & model 이 "claude" 로 시작 → ClaudeAdapter
-//   - EXTERNAL & model 이 "gemini" 로 시작 → GeminiAdapter
-//   - EXTERNAL & 그 외 → OpenAIAdapter (기본 외부 모델)
+// CreateAdapter 는 ProviderType 에 따라 어댑터를 생성한다.
+// LOCAL→Ollama, EXTERNAL 은 model 접두사로 claude→Claude / gemini→Gemini / 그 외→OpenAI 분기.
 func (f *Factory) CreateAdapter(provider domainllmprovider.LLMProvider) (domainllmprovider.Adapter, error) {
 	switch provider.ProviderType {
 	case domainllmprovider.ProviderTypeLocal:

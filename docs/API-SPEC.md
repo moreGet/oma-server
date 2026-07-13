@@ -350,7 +350,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 ### 어드민 웹 페이지 (`/admin`)
 - **스택**: 서버사이드 렌더링 `html/template` + **Bootstrap 5.3(다크 `data-bs-theme`)** + **Bootstrap Icons**(CDN). 사이드바 레이아웃, 생성/관리는 **모달**. Node 빌드 불필요, Go 바이너리에 `go:embed`.
 - **인증**: 로그인 시 JWT 를 **HttpOnly·SameSite=Lax 쿠키**(`admin_session`)에 저장. 페이지는 쿠키로 인증(API 의 Bearer 와 독립).
-- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·**도구 정책 오버라이드(기본/허용/차단 카테고리 리스트)**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/tools`(**전역 도구 정책**: 모드(cached/realtime)·허용/차단 도구(**카탈로그 카테고리 리스트**: 기본/허용/차단 3-상태)·위험명령/경로 차단 패턴(JSON), DB 저장·즉시 반영. 멤버별 오버라이드는 `/admin/members` 모달의 '도구' 탭), `/admin/client`(**클라이언트 버전**: latest·minimum_supported·download_url·notice·mandatory, DB 저장·즉시 반영 → `GET /api/v1/client/version` 에 반영), `/admin/chat`(**채팅 관리/모더레이션**: 방·메시지·첨부 집계 + 방 목록 + 방 상세(멤버·메시지 검토) + 메시지 소프트삭제·방 삭제, 삭제 시 멤버에게 실시간 반영), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`). 사이드바는 섹션별 접이식(슬라이드) 메뉴(개요/사용자/AI/저장소/채팅/보안·도구/클라이언트).
+- **페이지**: `/admin/login`, `/admin/`(대시보드 통계), `/admin/members`(목록 + 생성/관리 모달: 프로필·역할·활성·비번리셋·**토큰 한도(일/주/월)**·사용량 초기화·**세션 한도**·**도구 정책 오버라이드(기본/허용/차단 카테고리 리스트)**·삭제 + 전역 기본 토큰 한도), `/admin/providers`(목록 + 등록/관리 모달, **admin↑ 전용** — 비관리자는 사이드바 Provider 메뉴가 숨겨지고 직접 접근 시 대시보드로 리다이렉트), `/admin/transcripts`(대화 이력 저장: 백엔드 DB/파일/S3·보존·첨부 스트립·연결테스트), `/admin/sessions`(세션 저장: 백엔드 DB/파일/S3·전역 최대 세션 수·연결테스트), `/admin/tools`(**전역 도구 정책**: 모드(cached/realtime)·허용/차단 도구(**카탈로그 카테고리 리스트**: 기본/허용/차단 3-상태)·위험명령/경로 차단 패턴(JSON), DB 저장·즉시 반영. 멤버별 오버라이드는 `/admin/members` 모달의 '도구' 탭), `/admin/client`(**클라이언트 버전**: latest·minimum_supported·download_url·notice·mandatory, DB 저장·즉시 반영 → `GET /api/v1/client/version` 에 반영), `/admin/chat`(**채팅 관리/모더레이션**: 방·메시지·첨부 집계 + 방 목록 + 방 상세(멤버·메시지 검토) + 메시지 소프트삭제·방 삭제, 삭제 시 멤버에게 실시간 반영), `/admin/account`(계정 정보 + 본인 프로필 편집). 비밀번호 변경 UI는 멤버 관리로 통합(셀프 변경은 API `/me/password`). 사이드바는 섹션별 접이식(슬라이드) 메뉴(개요/사용자/AI/저장소/채팅/보안·도구/클라이언트).
 
 ### 토큰 쿼터(사용자별 일·주·월 한도)
 - **모델**: **일(YYYY-MM-DD)·주(YYYY-Www, ISO)·월(YYYY-MM)** 3개 기간 한도를 동시 시행(UTC, 자동 리셋). 한도 = 윈도우별 **멤버 값(>0) 우선, 없으면 전역 기본값**, 0이면 그 윈도우 무제한. 카운트=`total_tokens`.
@@ -401,7 +401,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 | `POST /api/v1/projects/{id}/conversations` | 대화 업서트(push) `{client_id,title,created_utc,updated_utc,messages[]}` → `{id,client_id,updated_utc}` |
 | `DELETE /api/v1/projects/{id}/conversations/{cid}` | 대화 삭제 |
 
-- **업서트**: `client_id`(클라 GUID) ↔ 서버 id 매핑, 재전송 시 같은 id 반환. 메타데이터는 DB(`projects`·`conversations`), 소유권(owner) 스코프.
+- **업서트**: `client_id`(클라 GUID) ↔ 서버 id 매핑, 재전송 시 같은 id 반환. 메타데이터는 DB(`projects`·`conversations`), 소유권(owner) 스코프. 업서트는 driver-native atomic upsert(mysql `ON DUPLICATE KEY`/sqlite `ON CONFLICT`)라 동시 재전송에도 중복 없이 정확.
 - **대화 본문 저장**: messages 를 **gzip** 후 선택형 백엔드(**DB BLOB / 로컬 디렉터리 / S3**)에 `<owner>/<project>/<conversation>.json.gz` 구조로 저장. 어드민 `/admin/sessions` 에서 백엔드 선택(로그 저장과 동일 방식, 설정은 분리). S3 시크릿 AES-GCM.
 - **계정별 세션 캡(하드)**: 신규 대화 세션 수가 한도 도달 시 **429**(`rate_limited`) 거부(기존 세션 업서트는 허용). 한도 = 멤버별 오버라이드(>0) 우선, 없으면 전역 기본(`session_settings.default_max_sessions`), 0=무제한. 어드민 `/admin/sessions`(전역) + 멤버 모달(개별).
 
@@ -452,5 +452,5 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 - **감사 로깅**: 모든 slog 이벤트가 **비동기 핸들러**(버퍼+워커)로 비차단 기록. `event` taxonomy: `auth.*`/`member.*`/`provider.*`/`chat.request`/`agent.request`(메타데이터만, 본문·시크릿 미기록). 헬스 제외, `request_id` 상관관계.
 - **대화 이력**: chat/agent SSE 종료 시 요청+응답을 **gzip 압축** 후 비차단 저장. 백엔드는 어드민 `/admin/transcripts`에서 선택 — **DB(gzip BLOB)** / **로컬 파일** / **S3(minio-go)**. S3 시크릿은 **AES-GCM 암호화**(`APP_ENCRYPTION_SECRET`), 응답 마스킹. 끄면 기록 생략.
 - **액션 피드백**: 작업 결과는 **토스트**(성공=초록/오류=빨강)로 노출. 플래시는 쿠키에 base64 인코딩(한글 보존) + 성공/오류 레벨 구분.
-- **권한 UI 게이팅**: USER 는 읽기 전용(멤버 메뉴 숨김, Provider 변경 버튼 숨김). 백엔드 use case 가 이중으로 인가 강제. 멤버 생성/역할 드롭다운은 actor 가 제어 가능한 역할만 노출.
+- **권한 UI 게이팅**: USER 는 읽기 전용(멤버 메뉴 숨김, **Provider 메뉴·페이지 전체 숨김/차단** — `/admin/providers`는 admin↑ 전용이라 비관리자 접근 시 대시보드로 리다이렉트). 백엔드 use case·페이지 가드가 이중으로 인가 강제. 멤버 생성/역할 드롭다운은 actor 가 제어 가능한 역할만 노출.
 - 같은 오리진이라 CORS 불필요. (CSRF 는 SameSite=Lax 로 1차 완화; 토큰 기반 CSRF 는 후속.)

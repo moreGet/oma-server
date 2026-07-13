@@ -13,34 +13,31 @@ import (
 var _ domainproject.ConversationRepository = (*ConversationRepository)(nil)
 
 // ConversationRepository 는 대화 메타데이터를 영속화한다(본문은 ContentStore).
-type ConversationRepository struct{ db *sql.DB }
-
-func NewConversationRepository(conn *sql.DB) *ConversationRepository {
-	return &ConversationRepository{db: conn}
+type ConversationRepository struct {
+	db     *sql.DB
+	driver string // mysql | sqlite (atomic upsert SQL 분기)
 }
 
+func NewConversationRepository(conn *sql.DB, driver string) *ConversationRepository {
+	return &ConversationRepository{db: conn, driver: driver}
+}
+
+// UpsertConversation 은 owner+client_id 로 대화를 driver 별 atomic upsert 한다(동시 동기화 레이스·왕복 제거).
 func (r *ConversationRepository) UpsertConversation(ctx context.Context, c domainproject.Conversation) (domainproject.Conversation, error) {
-	var existingID string
-	var createdUnix int64
-	err := r.db.QueryRowContext(ctx, "SELECT id, created_utc FROM conversations WHERE owner_id=? AND client_id=?", c.OwnerID, c.ClientID).Scan(&existingID, &createdUnix)
-	switch {
-	case err == nil:
-		if _, err := r.db.ExecContext(ctx, "UPDATE conversations SET project_id=?, title=?, updated_utc=?, message_count=? WHERE id=?",
-			nullString(c.ProjectID), c.Title, c.UpdatedUTC.Unix(), c.MessageCount, existingID); err != nil {
-			return domainproject.Conversation{}, fmt.Errorf("conversation: update: %w", err)
-		}
-		c.ID = existingID
-		c.CreatedUTC = time.Unix(createdUnix, 0).UTC()
-		return c, nil
-	case errors.Is(err, sql.ErrNoRows):
-		if _, err := r.db.ExecContext(ctx, "INSERT INTO conversations (id, project_id, owner_id, client_id, title, created_utc, updated_utc, message_count) VALUES (?,?,?,?,?,?,?,?)",
-			c.ID, nullString(c.ProjectID), c.OwnerID, c.ClientID, c.Title, c.CreatedUTC.Unix(), c.UpdatedUTC.Unix(), c.MessageCount); err != nil {
-			return domainproject.Conversation{}, fmt.Errorf("conversation: insert: %w", err)
-		}
-		return c, nil
-	default:
-		return domainproject.Conversation{}, fmt.Errorf("conversation: lookup: %w", err)
+	tail := " ON CONFLICT(owner_id, client_id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, updated_utc=excluded.updated_utc, message_count=excluded.message_count" // sqlite
+	if r.driver == "mysql" {
+		tail = " ON DUPLICATE KEY UPDATE project_id=VALUES(project_id), title=VALUES(title), updated_utc=VALUES(updated_utc), message_count=VALUES(message_count)"
 	}
+	q := "INSERT INTO conversations (id, project_id, owner_id, client_id, title, created_utc, updated_utc, message_count) VALUES (?,?,?,?,?,?,?,?)" + tail
+	if _, err := r.db.ExecContext(ctx, q, c.ID, nullString(c.ProjectID), c.OwnerID, c.ClientID, c.Title, c.CreatedUTC.Unix(), c.UpdatedUTC.Unix(), c.MessageCount); err != nil {
+		return domainproject.Conversation{}, fmt.Errorf("conversation: upsert: %w", err)
+	}
+	var createdUnix int64
+	if err := r.db.QueryRowContext(ctx, "SELECT id, created_utc FROM conversations WHERE owner_id=? AND client_id=?", c.OwnerID, c.ClientID).Scan(&c.ID, &createdUnix); err != nil {
+		return domainproject.Conversation{}, fmt.Errorf("conversation: upsert reload: %w", err)
+	}
+	c.CreatedUTC = time.Unix(createdUnix, 0).UTC()
+	return c, nil
 }
 
 func (r *ConversationRepository) ListByProject(ctx context.Context, ownerID, projectID string) ([]domainproject.Conversation, error) {

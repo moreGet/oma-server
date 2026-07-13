@@ -215,16 +215,16 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if providers, err := s.providers.List(r.Context(), actorID(r)); err == nil {
-		dv.ProviderTotal = len(providers)
-		for _, p := range providers {
-			if p.IsActive {
-				dv.ActiveProvider = p.Name
-				break
+	if pd.CanManage {
+		if providers, err := s.providers.List(r.Context(), actorID(r)); err == nil {
+			dv.ProviderTotal = len(providers)
+			for _, p := range providers {
+				if p.IsActive {
+					dv.ActiveProvider = p.Name
+					break
+				}
 			}
 		}
-	}
-	if pd.CanManage {
 		dv.ShowChat = true
 		if st, err := s.chat.AdminStats(r.Context()); err == nil {
 			dv.ChatRooms = st.Rooms
@@ -246,8 +246,7 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 역할 드롭다운은 actor 가 제어 가능한(자기보다 낮은 레벨) 역할만 노출한다.
-	// 인가 규칙 CanControl(actor>target)과 UI 를 일치시켜, 할당 불가능한 역할을
-	// 골라 생성/변경이 매번 permission denied 로 실패하는 문제를 방지한다.
+	// 인가 규칙 CanControl(actor>target)과 UI 를 맞춰 할당 불가 역할 선택 시 permission denied 실패를 방지한다.
 	roles, _ := s.auth.ListRoles(r.Context())
 	controllable := make([]domainauth.Role, 0, len(roles))
 	for _, role := range roles {
@@ -411,6 +410,9 @@ func formLimits(r *http.Request) domainquota.Limits {
 // --- Provider 관리 ---
 
 func (s *Server) providersPage(w http.ResponseWriter, r *http.Request) {
+	if !s.requireManage(w, r) {
+		return
+	}
 	pd := s.base(r, w, "LLM Provider", "providers")
 	providers, err := s.providers.List(r.Context(), actorID(r))
 	if err != nil {
@@ -865,9 +867,8 @@ func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "tools", pd)
 }
 
-// buildToolEditor 는 허용/차단 목록을 카테고리 리스트 편집기 데이터로 변환한다.
-// idPrefix 는 라디오 id 충돌을 막는 접두사다(전역="g", 멤버="m"+ID).
-// 도구 상태는 차단 우선(authorize 로직과 동일): disabled > enabled > default.
+// buildToolEditor 는 허용/차단 목록을 카테고리 리스트 편집기 데이터로 변환한다(idPrefix 는 라디오 id 충돌 방지: 전역="g", 멤버="m"+ID).
+// 도구 상태는 차단 우선(authorize 와 동일): disabled > enabled > default.
 func buildToolEditor(idPrefix string, enabled, disabled []string) toolEditorView {
 	enabledSet := toStringSet(enabled)
 	disabledSet := toStringSet(disabled)
@@ -1044,9 +1045,8 @@ func (s *Server) memberSetToolPolicy(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, basePath+"/members")
 }
 
-// flashResult 는 use case 결과를 플래시 메시지로 변환한다.
-// 실패 시 원시 에러를 사용자에게 노출하지 않고 친화적 메시지로 매핑하며,
-// 운영/감사를 위해 원시 에러는 서버 로그로 남긴다(시크릿 누출 방지).
+// flashResult 는 use case 결과를 플래시 메시지로 변환한다(실패 시 친화 메시지로 매핑, 시크릿 누출 방지).
+// 원시 에러는 운영/감사를 위해 서버 로그로만 남긴다.
 func (s *Server) flashResult(w http.ResponseWriter, err error, okMsg string) {
 	if err != nil {
 		slog.Warn("admin action failed", "event", "admin.action", "error", err)
@@ -1057,8 +1057,7 @@ func (s *Server) flashResult(w http.ResponseWriter, err error, okMsg string) {
 }
 
 // webErrorMessage 는 도메인 에러를 사용자 친화 한글 메시지로 매핑한다(글로벌 예외 처리).
-// 검증 에러 메시지는 사용자에게 보여주도록 설계된 안내이므로 그대로 노출하고,
-// 그 외 알 수 없는 에러는 내부 상세를 숨기고 일반 메시지로 대체한다.
+// 검증 에러는 그대로 노출하고, 알 수 없는 에러는 내부 상세를 숨겨 일반 메시지로 대체한다.
 func webErrorMessage(err error) string {
 	var ave *domainauth.ErrValidation
 	var pve *domainllmprovider.ErrValidation
