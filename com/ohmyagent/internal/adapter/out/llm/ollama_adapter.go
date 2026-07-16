@@ -15,12 +15,9 @@ import (
 // 컴파일 타임 인터페이스 만족 검증.
 var _ domainllmprovider.Adapter = (*OllamaAdapter)(nil)
 
-const (
-	// defaultOllamaEndpoint 는 endpoint 미설정 시 사용되는 로컬 Ollama 주소다.
-	defaultOllamaEndpoint = "http://localhost:11434"
-	// defaultOllamaModel 은 요청/설정 모두 모델을 지정하지 않았을 때의 기본 모델이다.
-	defaultOllamaModel = "llama3"
-)
+// defaultOllamaModel 은 요청/설정 모두 모델을 지정하지 않았을 때의 기본 모델이다.
+// endpoint 기본값은 SDK 의 ClientFromEnvironment(OLLAMA_HOST → http://localhost:11434)가 처리한다.
+const defaultOllamaModel = "llama3"
 
 // OllamaAdapter 는 Ollama Go SDK 의 Chat 스트리밍 API 를 쓰는 LOCAL provider 어댑터다.
 // 로컬 LLM 이므로 API 키는 사용하지 않는다.

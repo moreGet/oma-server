@@ -63,8 +63,21 @@ auth:
   jwt_expiry: "24h"
   seed_admin_username: "admin"
   seed_admin_password: "admin"            # 비운영 편의값(운영은 env 주입)
+messaging:
+  broadcaster: "memory"                   # memory(단일 인스턴스) | redis(다중 인스턴스 pub/sub)
+  redis:
+    addr: "localhost:6379"                # broadcaster=redis 일 때 접속 주소
+    password: ""                          # 운영은 env(APP_MESSAGING_REDIS_PASSWORD) override
 ```
 > sqlite DSN 의 `~`/`~/` 는 config 로더가 사용자 홈으로 확장한다(`expandHomePath`).
+
+MySQL 로 띄우려면 레포 루트의 `docker-compose.yml`(MariaDB 10.11)을 쓰면 된다:
+```bash
+docker compose up -d mariadb
+APP_ENV=docker APP_DATABASE_DSN='ohmyagent:ohmyagent@tcp(localhost:3306)/ohmyagent?parseTime=true' \
+  APP_AUTH_JWT_SECRET=dev-secret go run ./com/ohmyagent/cmd/api
+```
+> `configs/docker.yaml` 은 driver=mysql 이고 DSN·JWT 시크릿을 **env 주입 전제**로 비워 둔다.
 
 ### 4) 실행
 ```bash
@@ -141,13 +154,13 @@ API 키는 **둘 중 하나**로 등록:
 - **DB 풀**: `MaxIdleConns` 를 `MaxOpenConns` 와 동일하게(`database/sql` 기본값 2 대신) 설정해 부하 시 커넥션 open/close churn 을 제거하고, `ConnMaxLifetime`(30m)·`ConnMaxIdleTime`(5m)로 스테일 커넥션을 정리한다. sqlite 는 단일 writer 라 1, mysql 풀 크기는 `max_open_conns`(설정 미지정 시 10)로 조정.
 - **채팅 멘션 피드 인덱스**: `GET /chat/mentions` 는 방 필터 없이 `created_at DESC` 정렬+LIMIT 하므로 `chat_messages(created_at)` 인덱스로 전체 스캔+filesort 를 제거(인덱스 순서 스캔 + 조기 LIMIT 종료).
 - **멤버 목록 인덱스**: 어드민 `GET /admin/members` 는 `created_at DESC` 정렬+LIMIT/OFFSET 하므로 `idx_members_created_at`(`members(created_at)`, 마이그레이션 00022) 로 테이블 전체 filesort 를 제거(멤버 수가 커져도 인덱스 순서 스캔).
-- **토큰 쿼터 핫패스**(대규모 동접 채팅): chat/agent 요청마다 일·주·월 사용량을 윈도우별 개별 조회 대신 **IN 절 단일 쿼리**(`UsageForPeriods`)로 묶고(시행 `Check`·조회 `/me/quota`), 응답 후 누적도 **멀티로우 upsert 단일 쿼리**(`AddUsage`)로 묶어 채팅당 쿼터 DB 왕복을 절반 이하로 줄인다. 무제한(한도 0) 윈도우는 조회 자체를 생략. 토큰 추정 폴백 텍스트(대화 전체 연결)는 **usage 미제공 시에만 지연 생성**(정상 경로 할당 회피).
+- **토큰 쿼터 핫패스**(대규모 동접 채팅): chat/agent 요청마다 일·주·월 사용량을 윈도우별 개별 조회 대신 **IN 절 단일 쿼리**(`UsageForPeriods`)로 묶고(시행 `Check`·조회 `/me/quota`), 응답 후 누적도 **멀티로우 upsert 단일 쿼리**(`AddUsage`)로 묶어 채팅당 쿼터 DB 왕복을 절반 이하로 줄인다. 무제한(한도 0) 윈도우는 조회 자체를 생략. 토큰 추정 폴백 텍스트(대화 전체 연결)는 **usage 미제공 시에만 지연 생성**(정상 경로 할당 회피). 전역 기본 한도는 **30s TTL 캐시**(`atomic.Pointer`)로 요청당 반복 조회를 없애고, 어드민이 기본 한도를 바꾸면 캐시를 즉시 무효화한다. 스트림 종료 후 사용량 누적은 `context.WithoutCancel` 로 분리해 **클라 조기 종료 시에도 회계 누락이 없다**.
 - **LLM 업스트림**: 모든 외부 어댑터가 **공유 HTTP 클라이언트**(Transport `MaxIdleConns=256`·`MaxIdleConnsPerHost=64`, HTTP/2)로 OpenAI/Claude/Gemini 커넥션을 재사용(기본 2 병목 제거). 전역 타임아웃 없이 ctx 로 취소(SSE 장기 스트리밍 보존).
 - **활성 Provider 캐시**: 질의마다 DB 조회 없이 `atomic.Value` 캐시에서 활성 Provider 해석.
 - **할당 절감(GC)**: 대화 이력·세션 본문 gzip 저장 경로가 `gzip.Writer` 를 **`sync.Pool`** 로 재사용해 요청당 압축기 재할당을 제거(고동접 GC 압력 완화). 응답 본문 이력 저장은 비차단 비동기 큐.
 - **로깅**: 헬스 체크 제외(LB 폴링 노이즈), `request_id`(`X-Request-Id`) 상관관계, 상태/지연 기반 레벨, 응답 바이트·클라이언트 IP 포함. slog 이벤트는 버퍼+워커 **비동기 핸들러**로 비차단 기록.
 
-> 수평 확장: 상태는 DB 에만 있고 핸들러는 stateless(JWT)라 인스턴스를 늘려 LB 뒤에 두면 된다. sqlite 는 단일 노드용이므로 다중 인스턴스는 **mysql** 사용. **사용자 간 실시간 채팅**은 인메모리 허브라 다중 인스턴스에선 `messaging.broadcaster: redis`(Redis pub/sub)로 전환해 인스턴스 간 이벤트를 전파한다(기본 `memory`=단일 인스턴스).
+> 수평 확장: 상태는 DB 에만 있고 핸들러는 stateless(JWT)라 인스턴스를 늘려 LB 뒤에 두면 된다. sqlite 는 단일 노드용이므로 다중 인스턴스는 **mysql** 사용. **사용자 간 실시간 채팅**은 인메모리 허브라 다중 인스턴스에선 `messaging.broadcaster: redis`(Redis pub/sub)로 전환해 인스턴스 간 이벤트를 전파한다(기본 `memory`=단일 인스턴스). Redis publish 에는 **2s 타임아웃**을 둬 느린 Redis 가 요청·WS 고루틴을 무기한 붙잡지 못하게 한다.
 
 ---
 

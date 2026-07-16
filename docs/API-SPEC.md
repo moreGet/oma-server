@@ -282,7 +282,7 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
 ### 도구 정책 / 클라이언트 버전 / 명령 보안 (user, 선택 기능)
 서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략, 명령 보안=클라 디폴트만).
 - **도구 정책**(`tools/policy`)·**명령 보안**(`security/command-policy`)은 **DB(전역 `tool_policy_settings` + 멤버별 `member_tool_policy`)**, **클라이언트 버전**(`client/version`)은 **DB(`client_version_settings`)** 에 저장되고 어드민(`/admin/tools` 전역, `/admin/members` 멤버별, `/admin/client`)에서 편집한다(즉시 반영, atomic 캐시). yaml 설정 아님.
-- **도구 카탈로그**: 클라이언트가 노출하는 26개 도구명은 서버 상수(`domain/toolpolicy` `ClientTools`)이자 DB 시드(`tool_catalog`)로 고정되어, 어드민이 허용/차단을 자유 문자열 대신 **고정 목록(카테고리 리스트)** 에서 고른다(오타 방지).
+- **도구 카탈로그**: 클라이언트가 노출하는 **29개** 도구명은 서버 상수(`domain/toolpolicy` `ClientTools`)이자 DB 시드(`tool_catalog`, 마이그레이션 00020 + 00023)로 고정되어, 어드민이 허용/차단을 자유 문자열 대신 **고정 목록(카테고리 리스트)** 에서 고른다(오타 방지). 카테고리는 **셸 / 파일 / 시스템 / 문서·데이터 / 압축 / 에이전트** 6종.
 
 | 메서드·경로 | 기능 |
 |---|---|
