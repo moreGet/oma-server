@@ -147,7 +147,7 @@ data: {"done":true,"finish_reason":"stop","usage":{"prompt_tokens":23,"completio
 **스트리밍 시작 전 오류**는 일반 JSON 에러로 반환:
 - 입력 검증 실패 → `400 BAD_REQUEST`
 - 활성 Provider 없음 → `404 NOT_FOUND` (`no active llm provider`)
-- 어댑터가 채팅 미지원(예: Claude) → `502 BAD_GATEWAY`
+- 어댑터가 채팅 미지원 → `502 BAD_GATEWAY` (현재 4개 어댑터 모두 채팅 스트리밍 지원 — 아래 표 참조. 향후 비채팅 어댑터 추가 대비 방어 매핑)
 - 외부 LLM 호출 실패 → `502 BAD_GATEWAY`
 
 ### Provider별 채팅 지원 현황
