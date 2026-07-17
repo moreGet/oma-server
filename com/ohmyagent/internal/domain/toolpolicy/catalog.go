@@ -5,8 +5,9 @@ package toolpolicy
 // 입력하다 생기는 오타를 막기 위해, 도구명을 상수·고정 카탈로그(칩)로 제공한다.
 //
 // sync with client App.xaml.cs tools[]
-// 도구를 추가/제거하면 (1) 아래 상수·ClientTools, (2) 마이그레이션
-// 00020_seed_tool_catalog.sql 의 tool_catalog 시드를 함께 갱신한다.
+// 도구를 추가/제거하면 (1) 아래 상수·ClientTools, (2) tool_catalog 시드 마이그레이션을
+// 함께 갱신한다(최초 00020, 이후 증분: 00023, 00024...). 둘이 어긋나면 어드민이 그 도구를
+// 정책으로 통제할 수 없다 — 실제로 PPTX·HWPX 3개가 그렇게 누락됐었다(00024 에서 보정).
 //
 // 출처: 각 ITool.Name (ToolRegistry → ToolSchema.name == 와이어 name == 정책 매칭 키).
 // 정책 매칭은 서버가 내려준 문자열을 대소문자 구분하여 그대로 비교하므로 전부 소문자 snake_case.
@@ -52,6 +53,9 @@ const (
 	ToolCompressFiles         = "compress_files"
 	ToolExtractArchive        = "extract_archive"
 	ToolManageTodos           = "manage_todos"
+	ToolReadPptx              = "read_pptx"
+	ToolWritePptx             = "write_pptx"
+	ToolReadHwpx              = "read_hwpx"
 )
 
 // CatalogEntry 는 카탈로그 도구 1건이다(이름 + 카테고리 + 노출 순서).
@@ -60,7 +64,7 @@ type CatalogEntry struct {
 	Category string // CategoryShell|File|System|Document
 }
 
-// ClientTools 는 클라이언트가 노출하는 29개 도구를 App.xaml.cs tools[] 등록(노출) 순서대로 담는다.
+// ClientTools 는 클라이언트가 노출하는 32개 도구를 App.xaml.cs tools[] 등록(노출) 순서대로 담는다.
 // 어드민 UI 는 이 목록으로 선택 칩을 렌더하고, 정책(enabled/disabled)은 이 이름들로만 구성한다.
 var ClientTools = []CatalogEntry{
 	{ToolRunCommand, CategoryShell},
@@ -92,6 +96,9 @@ var ClientTools = []CatalogEntry{
 	{ToolCompressFiles, CategoryArchive},
 	{ToolExtractArchive, CategoryArchive},
 	{ToolManageTodos, CategoryAgent},
+	{ToolReadPptx, CategoryDocument},
+	{ToolWritePptx, CategoryDocument},
+	{ToolReadHwpx, CategoryDocument},
 }
 
 // IsKnownTool 은 도구명이 카탈로그에 존재하는지 반환한다(정책 입력 검증용).
