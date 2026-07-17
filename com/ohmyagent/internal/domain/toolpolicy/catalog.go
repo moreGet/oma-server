@@ -56,6 +56,7 @@ const (
 	ToolReadPptx              = "read_pptx"
 	ToolWritePptx             = "write_pptx"
 	ToolReadHwpx              = "read_hwpx"
+	ToolTask                  = "task"
 )
 
 // CatalogEntry 는 카탈로그 도구 1건이다(이름 + 카테고리 + 노출 순서).
@@ -64,7 +65,7 @@ type CatalogEntry struct {
 	Category string // CategoryShell|File|System|Document
 }
 
-// ClientTools 는 클라이언트가 노출하는 32개 도구를 App.xaml.cs tools[] 등록(노출) 순서대로 담는다.
+// ClientTools 는 클라이언트가 노출하는 33개 도구를 App.xaml.cs tools[] 등록(노출) 순서대로 담는다.
 // 어드민 UI 는 이 목록으로 선택 칩을 렌더하고, 정책(enabled/disabled)은 이 이름들로만 구성한다.
 var ClientTools = []CatalogEntry{
 	{ToolRunCommand, CategoryShell},
@@ -99,6 +100,7 @@ var ClientTools = []CatalogEntry{
 	{ToolReadPptx, CategoryDocument},
 	{ToolWritePptx, CategoryDocument},
 	{ToolReadHwpx, CategoryDocument},
+	{ToolTask, CategoryAgent},
 }
 
 // IsKnownTool 은 도구명이 카탈로그에 존재하는지 반환한다(정책 입력 검증용).
