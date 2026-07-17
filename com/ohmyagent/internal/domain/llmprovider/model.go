@@ -106,10 +106,20 @@ type ChatRequest struct {
 }
 
 // ChatUsage 는 토큰 사용량이다(제공자가 보고할 때만 채워짐).
+//
+// 프롬프트 캐싱 주의: Anthropic 은 캐시 적중분을 input_tokens 에서 "제외"하고 별도로 보고한다.
+// 그대로 PromptTokens 에 넣으면 캐싱을 켜는 순간 사용량 집계가 급감해 쿼터 의미가 조용히 바뀐다.
+// 그래서 PromptTokens 는 "처리된 입력 토큰 총합"(신규 + 캐시 읽기 + 캐시 생성)을 유지하고,
+// 캐시 내역은 아래 두 필드로 따로 노출한다. 캐싱은 비용을 줄이는 것이지 사용량 산정 기준을 바꾸는 게 아니다.
 type ChatUsage struct {
-	PromptTokens     int
+	PromptTokens     int // 처리된 입력 토큰 총합(캐시 적중분 포함) — 쿼터 산정 기준
 	CompletionTokens int
 	TotalTokens      int
+
+	// CacheReadTokens 는 캐시에서 읽은 입력 토큰이다(정가의 약 10%로 청구). 0 이면 캐시 미적중.
+	CacheReadTokens int
+	// CacheCreationTokens 는 캐시에 쓴 입력 토큰이다(정가의 약 125%로 청구). 첫 요청에서만 발생.
+	CacheCreationTokens int
 }
 
 // ChatStreamChunk 는 스트리밍 응답의 한 조각이다.

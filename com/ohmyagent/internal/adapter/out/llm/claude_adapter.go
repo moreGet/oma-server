@@ -59,9 +59,26 @@ func (a *ClaudeAdapter) resolveModel(reqModel string) string {
 	return defaultClaudeModel
 }
 
+// cacheBreakpoint 는 cache_control 브레이크포인트 값이다.
+//
+// Type 을 반드시 명시해야 한다. 빈 리터럴(CacheControlEphemeralParam{})은 모든 필드가 제로값이라
+// SDK 의 `json:"cache_control,omitzero"` 태그에 걸려 직렬화에서 통째로 빠진다 — 즉 캐싱이
+// 컴파일 오류도 런타임 오류도 없이 "조용한 no-op" 이 된다. 실측으로 확인했다:
+//
+//	CacheControlEphemeralParam{}                  → {"name":"x"}
+//	CacheControlEphemeralParam{Type:"ephemeral"}  → {"name":"x","cache_control":{"type":"ephemeral"}}
+//
+// TTL 은 생략해 기본값(5분)을 쓴다. 에이전트 루프는 반복 간격이 수 초라 5분으로 충분하다.
+func cacheBreakpoint() anthropic.CacheControlEphemeralParam {
+	return anthropic.CacheControlEphemeralParam{Type: "ephemeral"}
+}
+
 // claudeBuildSystem 은 system 역할 메시지들을 top-level System 텍스트 블록 배열로 분리한다.
 // 여러 system 메시지는 "\n\n" 로 결합한 단일 텍스트 블록이 된다(없으면 nil).
-func claudeBuildSystem(msgs []domainllmprovider.ChatMessage) []anthropic.TextBlockParam {
+//
+// cacheHere=true 면 이 블록에 cache_control 을 건다. 도구가 없는 요청(예: 요약 전용 호출)에서만
+// 사용한다 — 도구가 있으면 claudeBuildTools 의 브레이크포인트가 system 까지 함께 덮으므로 중복이다.
+func claudeBuildSystem(msgs []domainllmprovider.ChatMessage, cacheHere bool) []anthropic.TextBlockParam {
 	var systems []string
 	for _, m := range msgs {
 		if m.Role == domainllmprovider.ChatRoleSystem {
@@ -71,7 +88,11 @@ func claudeBuildSystem(msgs []domainllmprovider.ChatMessage) []anthropic.TextBlo
 	if len(systems) == 0 {
 		return nil
 	}
-	return []anthropic.TextBlockParam{{Text: strings.Join(systems, "\n\n")}}
+	block := anthropic.TextBlockParam{Text: strings.Join(systems, "\n\n")}
+	if cacheHere {
+		block.CacheControl = cacheBreakpoint()
+	}
+	return []anthropic.TextBlockParam{block}
 }
 
 // claudeBuildMessages 는 도메인 메시지를 Anthropic 메시지로 변환한다(멀티턴 히스토리).
@@ -121,7 +142,51 @@ func claudeBuildMessages(msgs []domainllmprovider.ChatMessage) []anthropic.Messa
 		}
 	}
 	flush()
+	claudeMarkHistoryCache(out)
 	return out
+}
+
+// claudeMarkHistoryCache 는 마지막 메시지의 마지막 블록에 cache_control 을 걸어 대화 프리픽스를 캐싱한다.
+//
+// 에이전트 루프는 매 반복마다 "지금까지의 전체 대화"를 다시 보낸다(서버는 stateless). 캐싱이 없으면
+// 그 이력을 매번 정가로 재청구받으므로 비용이 반복 수에 대해 제곱으로 늘어난다. 매 요청의 끝을 표시해 두면
+// 다음 반복에서 그 지점까지가 캐시 적중이 되고, 새로 늘어난 부분만 새로 청구된다.
+//
+// 브레이크포인트 예산: Anthropic 은 최대 4개를 허용한다. 여기서 1개, claudeBuildTools 에서 1개 → 총 2개.
+func claudeMarkHistoryCache(msgs []anthropic.MessageParam) {
+	if len(msgs) == 0 {
+		return
+	}
+	blocks := msgs[len(msgs)-1].Content
+	if len(blocks) == 0 {
+		return
+	}
+	// GetCacheControl 은 활성 variant(OfText/OfToolResult/...)의 필드 포인터를 준다.
+	// variant 가 cache_control 을 지원하지 않으면 nil 이며, 그 경우 조용히 넘어간다(캐싱은 최적화일 뿐).
+	if cc := blocks[len(blocks)-1].GetCacheControl(); cc != nil {
+		*cc = cacheBreakpoint()
+	}
+}
+
+// claudeUsage 는 Anthropic usage 를 도메인 사용량으로 옮긴다.
+//
+// 핵심: Anthropic 은 캐시 적중분을 input_tokens 에서 "제외"하고 cache_read/cache_creation 으로 따로 보고한다.
+// input_tokens 를 그대로 PromptTokens 에 넣으면 캐싱을 켜는 순간 쿼터 소모가 급감해 사용량 산정 기준이
+// 조용히 바뀐다. 캐싱은 비용 최적화이지 정책 변경이 아니므로, PromptTokens 에는 "처리된 입력 총합"을 담아
+// 캐싱 도입 전과 동일한 의미를 유지하고 캐시 내역은 별도 필드로 노출한다.
+func claudeUsage(u anthropic.Usage) *domainllmprovider.ChatUsage {
+	cacheRead := int(u.CacheReadInputTokens)
+	cacheWrite := int(u.CacheCreationInputTokens)
+	prompt := int(u.InputTokens) + cacheRead + cacheWrite
+	completion := int(u.OutputTokens)
+
+	return &domainllmprovider.ChatUsage{
+		PromptTokens:        prompt,
+		CompletionTokens:    completion,
+		TotalTokens:         prompt + completion,
+		CacheReadTokens:     cacheRead,
+		CacheCreationTokens: cacheWrite,
+	}
 }
 
 // claudeDecodeArguments 는 ToolCall.Arguments(JSON 문자열)를 tool_use input 으로 디코드한다.
@@ -139,6 +204,11 @@ func claudeDecodeArguments(args string) any {
 
 // claudeBuildTools 는 도메인 도구 정의를 Anthropic 도구로 변환한다.
 // Parameters(raw JSON Schema)를 InputSchema 로 그대로 전달하며, 비면 {"type":"object"} 기본값을 쓴다.
+//
+// 마지막 도구에 cache_control 을 걸어 [system + tools] 프리픽스를 캐싱한다.
+// 프롬프트 순서가 system → tools → messages 이고 캐시는 "표시된 블록까지의 프리픽스"를 잡으므로,
+// 도구 끝에 한 번만 걸면 시스템 프롬프트까지 함께 캐시된다(브레이크포인트 1개 절약).
+// 이 구간은 세션 내내 바뀌지 않는데 에이전트 루프는 매 반복 이를 전부 재전송하므로 적중률이 높다.
 func claudeBuildTools(tools []domainllmprovider.ToolDefinition) []anthropic.ToolUnionParam {
 	if len(tools) == 0 {
 		return nil
@@ -154,6 +224,7 @@ func claudeBuildTools(tools []domainllmprovider.ToolDefinition) []anthropic.Tool
 		}
 		out = append(out, anthropic.ToolUnionParam{OfTool: &tool})
 	}
+	out[len(out)-1].OfTool.CacheControl = cacheBreakpoint()
 	return out
 }
 
@@ -223,7 +294,8 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		MaxTokens: int64(maxTokens),
 		Messages:  claudeBuildMessages(req.Messages),
 	}
-	if system := claudeBuildSystem(req.Messages); len(system) > 0 {
+	// 도구가 있으면 도구 끝의 브레이크포인트가 system 까지 덮으므로, system 자체 표시는 도구가 없을 때만.
+	if system := claudeBuildSystem(req.Messages, len(req.Tools) == 0); len(system) > 0 {
 		params.System = system
 	}
 	if tools := claudeBuildTools(req.Tools); len(tools) > 0 {
@@ -267,11 +339,7 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		}
 	}
 
-	usage := &domainllmprovider.ChatUsage{
-		PromptTokens:     int(message.Usage.InputTokens),
-		CompletionTokens: int(message.Usage.OutputTokens),
-		TotalTokens:      int(message.Usage.InputTokens + message.Usage.OutputTokens),
-	}
+	usage := claudeUsage(message.Usage)
 
 	return onChunk(domainllmprovider.ChatStreamChunk{
 		Done:         true,
