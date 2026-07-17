@@ -68,7 +68,13 @@ func (s *AgentService) Stream(ctx context.Context, cmd domainagent.ChatCommand, 
 			}
 		}
 		stop := domainagent.NormalizeStopReason(chunk.FinishReason, len(chunk.ToolCalls) > 0)
-		return onEvent(domainagent.Event{Kind: domainagent.EventMessageStop, StopReason: stop, Usage: usage})
+		return onEvent(domainagent.Event{
+			Kind:              domainagent.EventMessageStop,
+			StopReason:        stop,
+			Usage:             usage,
+			Thinking:          chunk.Thinking,
+			ThinkingSignature: chunk.ThinkingSignature,
+		})
 	})
 }
 

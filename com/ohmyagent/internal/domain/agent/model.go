@@ -120,6 +120,12 @@ type Event struct {
 	ToolCall   *ToolCall // tool_call
 	StopReason string    // message_stop (end_turn/tool_use/max_tokens)
 	Usage      *Usage    // message_stop
+
+	// message_stop 에서만 — 이번 assistant 턴의 사고 원문·서명(확장 사고 켜졌을 때).
+	// 클라이언트가 이력에 저장했다가 다음 요청에 되돌려 보내야 도구 사용 시 400 을 피한다.
+	// 서명은 스트림 델타로는 오지 않고 최종 조각에만 있으므로 여기로만 전달된다.
+	Thinking          string
+	ThinkingSignature string
 }
 
 // Normalize 는 모델명·메시지 내용 공백을 정리한다.

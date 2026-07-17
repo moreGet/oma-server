@@ -181,7 +181,11 @@ func writeAgentEvent(w http.ResponseWriter, ev domainagent.Event) error {
 		tc := ev.ToolCall
 		return writeSSEEvent(w, "tool_call", agentToolCallDTO{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
 	case domainagent.EventMessageStop:
-		dto := agentStopDTO{StopReason: ev.StopReason}
+		dto := agentStopDTO{
+			StopReason:        ev.StopReason,
+			Thinking:          ev.Thinking,
+			ThinkingSignature: ev.ThinkingSignature,
+		}
 		if ev.Usage != nil {
 			dto.Usage = &chatUsageDTO{
 				PromptTokens:     ev.Usage.PromptTokens,
@@ -310,8 +314,10 @@ type agentDeltaDTO struct {
 }
 
 type agentStopDTO struct {
-	StopReason string        `json:"stop_reason"`
-	Usage      *chatUsageDTO `json:"usage,omitempty"`
+	StopReason        string        `json:"stop_reason"`
+	Usage             *chatUsageDTO `json:"usage,omitempty"`
+	Thinking          string        `json:"thinking,omitempty"`           // 확장 사고 재생용 원문
+	ThinkingSignature string        `json:"thinking_signature,omitempty"` // 그 사고의 서명
 }
 
 // agentErrToHTTP 는 agent/llmprovider 도메인 에러를 AppError 로 매핑한다.
