@@ -46,6 +46,9 @@ func (s *AgentService) Stream(ctx context.Context, cmd domainagent.ChatCommand, 
 			if chunk.Delta != "" {
 				return onEvent(domainagent.Event{Kind: domainagent.EventContentDelta, Delta: chunk.Delta})
 			}
+			if chunk.ThinkingDelta != "" {
+				return onEvent(domainagent.Event{Kind: domainagent.EventThinkingDelta, Delta: chunk.ThinkingDelta})
+			}
 			return nil
 		}
 		// 종료 조각: 도구 호출들 → message_stop 순으로 방출.
@@ -74,10 +77,12 @@ func toAdapterRequest(cmd domainagent.ChatCommand) domainllmprovider.ChatRequest
 	msgs := make([]domainllmprovider.ChatMessage, 0, len(cmd.Messages))
 	for _, m := range cmd.Messages {
 		lm := domainllmprovider.ChatMessage{
-			Role:       domainllmprovider.ChatRole(m.Role),
-			Content:    contentWithAttachments(m),
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
+			Role:              domainllmprovider.ChatRole(m.Role),
+			Content:           contentWithAttachments(m),
+			ToolCallID:        m.ToolCallID,
+			Name:              m.Name,
+			Thinking:          m.Thinking,
+			ThinkingSignature: m.ThinkingSignature,
 		}
 		for _, tc := range m.ToolCalls {
 			lm.ToolCalls = append(lm.ToolCalls, domainllmprovider.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
@@ -91,12 +96,20 @@ func toAdapterRequest(cmd domainagent.ChatCommand) domainllmprovider.ChatRequest
 			tools = append(tools, domainllmprovider.ToolDefinition{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
 		}
 	}
+	var thinking *domainllmprovider.ThinkingConfig
+	if cmd.Thinking != nil {
+		thinking = &domainllmprovider.ThinkingConfig{
+			Type:         cmd.Thinking.Type,
+			BudgetTokens: cmd.Thinking.BudgetTokens,
+		}
+	}
 	return domainllmprovider.ChatRequest{
 		Messages:    msgs,
 		Tools:       tools,
 		Model:       cmd.Model,
 		MaxTokens:   cmd.MaxTokens,
 		Temperature: cmd.Temperature,
+		Thinking:    thinking,
 	}
 }
 

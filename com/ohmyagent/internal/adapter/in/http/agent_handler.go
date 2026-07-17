@@ -175,6 +175,8 @@ func writeAgentEvent(w http.ResponseWriter, ev domainagent.Event) error {
 	switch ev.Kind {
 	case domainagent.EventContentDelta:
 		return writeSSEEvent(w, "content_delta", agentDeltaDTO{Delta: ev.Delta})
+	case domainagent.EventThinkingDelta:
+		return writeSSEEvent(w, "thinking_delta", agentDeltaDTO{Delta: ev.Delta})
 	case domainagent.EventToolCall:
 		tc := ev.ToolCall
 		return writeSSEEvent(w, "tool_call", agentToolCallDTO{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
@@ -209,12 +211,19 @@ type agentToolCallDTO struct {
 }
 
 type agentMessageDTO struct {
-	Role        string               `json:"role"`
-	Content     string               `json:"content,omitempty"`
-	ToolCallID  string               `json:"tool_call_id,omitempty"`
-	ToolCalls   []agentToolCallDTO   `json:"tool_calls,omitempty"`
-	Name        string               `json:"name,omitempty"`
-	Attachments []agentAttachmentDTO `json:"attachments,omitempty"`
+	Role              string               `json:"role"`
+	Content           string               `json:"content,omitempty"`
+	ToolCallID        string               `json:"tool_call_id,omitempty"`
+	ToolCalls         []agentToolCallDTO   `json:"tool_calls,omitempty"`
+	Name              string               `json:"name,omitempty"`
+	Attachments       []agentAttachmentDTO `json:"attachments,omitempty"`
+	Thinking          string               `json:"thinking,omitempty"`           // 확장 사고 재생용(assistant)
+	ThinkingSignature string               `json:"thinking_signature,omitempty"` // 그 사고 블록의 서명
+}
+
+type agentThinkingDTO struct {
+	Type         string `json:"type"`                    // "adaptive" | "enabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"` // Type="enabled" 일 때만
 }
 
 type agentToolDTO struct {
@@ -234,6 +243,7 @@ type agentChatReq struct {
 	Model       string            `json:"model,omitempty"`
 	MaxTokens   int               `json:"max_tokens,omitempty"`
 	Temperature *float64          `json:"temperature,omitempty"`
+	Thinking    *agentThinkingDTO `json:"thinking,omitempty"` // nil = 확장 사고 미사용(기본)
 	Metadata    *agentMetadataDTO `json:"metadata,omitempty"`
 	Stream      *bool             `json:"stream,omitempty"` // 수용하되 서버는 항상 SSE 스트리밍
 }
@@ -252,10 +262,12 @@ func (req agentChatReq) toCommand(actorID string) domainagent.ChatCommand {
 	msgs := make([]domainagent.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		dm := domainagent.Message{
-			Role:       domainagent.Role(m.Role),
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
+			Role:              domainagent.Role(m.Role),
+			Content:           m.Content,
+			ToolCallID:        m.ToolCallID,
+			Name:              m.Name,
+			Thinking:          m.Thinking,
+			ThinkingSignature: m.ThinkingSignature,
 		}
 		for _, tc := range m.ToolCalls {
 			dm.ToolCalls = append(dm.ToolCalls, domainagent.ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
@@ -278,6 +290,9 @@ func (req agentChatReq) toCommand(actorID string) domainagent.ChatCommand {
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		ActorID:     actorID,
+	}
+	if req.Thinking != nil {
+		cmd.Thinking = &domainagent.ThinkingConfig{Type: req.Thinking.Type, BudgetTokens: req.Thinking.BudgetTokens}
 	}
 	if req.Metadata != nil {
 		cmd.Metadata = domainagent.Metadata{OS: req.Metadata.OS, WorkspaceRoot: req.Metadata.WorkspaceRoot}

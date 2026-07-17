@@ -45,10 +45,24 @@ func TestResolveEffective(t *testing.T) {
 }
 
 func TestCatalog(t *testing.T) {
-	assert.Len(t, ClientTools, 29)
+	// 29 → 33: PPTX·HWPX 3개(카탈로그 드리프트 보정) + task(서브에이전트) 추가.
+	assert.Len(t, ClientTools, 33)
 	assert.Equal(t, "run_command", ClientTools[0].Name)
 	assert.True(t, IsKnownTool("read_document"))
 	assert.True(t, IsKnownTool("compress_files"))
 	assert.True(t, IsKnownTool("manage_todos"))
+	assert.True(t, IsKnownTool("read_pptx"))
+	assert.True(t, IsKnownTool("write_pptx"))
+	assert.True(t, IsKnownTool("read_hwpx"))
+	assert.True(t, IsKnownTool("task"))
 	assert.False(t, IsKnownTool("chat_send"))
+
+	// 카탈로그와 tool_catalog 시드 마이그레이션이 어긋나면 어드민이 그 도구를 통제할 수 없다.
+	// 여기서 개수·유일성을 지켜 드리프트를 조기에 잡는다.
+	seen := map[string]bool{}
+	for _, tool := range ClientTools {
+		assert.NotEmpty(t, tool.Category, "%s 에 카테고리가 없다", tool.Name)
+		assert.False(t, seen[tool.Name], "%s 가 카탈로그에 중복", tool.Name)
+		seen[tool.Name] = true
+	}
 }

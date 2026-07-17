@@ -119,7 +119,17 @@ func claudeBuildMessages(msgs []domainllmprovider.ChatMessage) []anthropic.Messa
 		case domainllmprovider.ChatRoleAssistant:
 			flush()
 			if len(m.ToolCalls) > 0 {
-				blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolCalls)+1)
+				blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.ToolCalls)+2)
+				// thinking 블록은 반드시 "맨 앞"에 온다. Anthropic 은 thinking 이 켜진 상태에서
+				// tool_use 가 있는 assistant 턴이면 그 앞에 thinking 블록(서명 포함)을 요구한다(없으면 400).
+				if m.Thinking != "" && m.ThinkingSignature != "" {
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{
+						OfThinking: &anthropic.ThinkingBlockParam{
+							Thinking:  m.Thinking,
+							Signature: m.ThinkingSignature,
+						},
+					})
+				}
 				if m.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(m.Content))
 				}
@@ -304,21 +314,33 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 	if req.Temperature != nil {
 		params.Temperature = anthropic.Float(*req.Temperature)
 	}
+	if think := claudeThinking(req.Thinking); think != nil {
+		params.Thinking = *think
+	}
 
 	stream := client.Messages.NewStreaming(ctx, params)
 
-	// 누적기: 스트림 이벤트로 최종 메시지(텍스트/tool_use/stop_reason/usage)를 조립한다.
+	// 누적기: 스트림 이벤트로 최종 메시지(텍스트/사고/tool_use/stop_reason/usage)를 조립한다.
 	message := anthropic.Message{}
 	for stream.Next() {
 		event := stream.Current()
 		if err := message.Accumulate(event); err != nil {
 			return fmt.Errorf("claude: %w: accumulate stream event: %v", domainllmprovider.ErrUpstream, err)
 		}
-		// 텍스트 델타는 도착 즉시 클라이언트로 흘려보낸다.
+		// 델타는 도착 즉시 흘려보낸다. 텍스트와 사고는 서로 다른 델타 타입이라 분리해 전달한다.
 		if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
-			if text, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok && text.Text != "" {
-				if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: text.Text}); err != nil {
-					return err
+			switch d := delta.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				if d.Text != "" {
+					if err := onChunk(domainllmprovider.ChatStreamChunk{Delta: d.Text}); err != nil {
+						return err
+					}
+				}
+			case anthropic.ThinkingDelta:
+				if d.Thinking != "" {
+					if err := onChunk(domainllmprovider.ChatStreamChunk{ThinkingDelta: d.Thinking}); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -327,24 +349,51 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		return fmt.Errorf("claude: %w: %v", domainllmprovider.ErrUpstream, err)
 	}
 
-	// 최종 메시지에서 tool_use 블록을 추출한다(input 은 누적된 JSON 원문).
+	// 최종 메시지에서 tool_use 와 thinking 블록을 추출한다.
 	var toolCalls []domainllmprovider.ToolCall
+	var thinkingText, thinkingSig string
 	for _, block := range message.Content {
-		if tu, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
+		switch b := block.AsAny().(type) {
+		case anthropic.ToolUseBlock:
 			toolCalls = append(toolCalls, domainllmprovider.ToolCall{
-				ID:        tu.ID,
-				Name:      tu.Name,
-				Arguments: string(tu.Input),
+				ID:        b.ID,
+				Name:      b.Name,
+				Arguments: string(b.Input),
 			})
+		case anthropic.ThinkingBlock:
+			// 서명은 다음 요청의 재생에 필요하다 — 바이트 그대로 보존한다.
+			thinkingText = b.Thinking
+			thinkingSig = b.Signature
 		}
 	}
 
 	usage := claudeUsage(message.Usage)
 
 	return onChunk(domainllmprovider.ChatStreamChunk{
-		Done:         true,
-		FinishReason: string(message.StopReason), // "end_turn" | "tool_use" | "max_tokens" 등 원문
-		ToolCalls:    toolCalls,
-		Usage:        usage,
+		Done:              true,
+		FinishReason:      string(message.StopReason), // "end_turn" | "tool_use" | "max_tokens" 등 원문
+		ToolCalls:         toolCalls,
+		Usage:             usage,
+		Thinking:          thinkingText,
+		ThinkingSignature: thinkingSig,
 	})
+}
+
+// claudeThinking 은 도메인 사고 설정을 SDK union 으로 옮긴다(nil 이면 아무것도 보내지 않음).
+//
+// 모델별 형식 차이를 그대로 전달만 한다(중계기 원칙) — 능력을 추측하지 않으므로 안 맞으면 Anthropic 이 400.
+func claudeThinking(cfg *domainllmprovider.ThinkingConfig) *anthropic.ThinkingConfigParamUnion {
+	if cfg == nil {
+		return nil
+	}
+	switch cfg.Type {
+	case "adaptive":
+		u := anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+		return &u
+	case "enabled":
+		u := anthropic.ThinkingConfigParamOfEnabled(int64(cfg.BudgetTokens))
+		return &u
+	default:
+		return nil // 알 수 없는 타입은 무시(미사용과 동일) — 오타로 요청이 깨지지 않게.
+	}
 }

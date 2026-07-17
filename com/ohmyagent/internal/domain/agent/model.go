@@ -63,6 +63,11 @@ type Message struct {
 	ToolCalls   []ToolCall   // role=assistant: 모델이 만든 도구 호출(히스토리)
 	Name        string       // 선택적 도구/함수 이름
 	Attachments []Attachment // 첨부(요구 D)
+
+	// 확장 사고 재생용(role=assistant). thinking 이 켜진 채 도구를 쓰면 그 턴의 thinking 블록을
+	// 되돌려 보내야 하므로 클라이언트가 이력에 저장했다가 다시 실어 보낸다. 미사용 시 빈 값.
+	Thinking          string
+	ThinkingSignature string
 }
 
 // Metadata 는 클라이언트 환경 힌트다(os/workspace 등).
@@ -78,8 +83,15 @@ type ChatCommand struct {
 	Model       string
 	MaxTokens   int
 	Temperature *float64
+	Thinking    *ThinkingConfig // nil = 확장 사고 미사용(기본)
 	Metadata    Metadata
 	ActorID     string
+}
+
+// ThinkingConfig 는 확장 사고 요청 설정이다(핸들러 DTO → 어댑터 전달용 중계).
+type ThinkingConfig struct {
+	Type         string // "adaptive" | "enabled"
+	BudgetTokens int
 }
 
 // --- 출력 이벤트(유스케이스 → 핸들러 SSE) ---
@@ -88,9 +100,10 @@ type ChatCommand struct {
 type EventKind string
 
 const (
-	EventContentDelta EventKind = "content_delta"
-	EventToolCall     EventKind = "tool_call"
-	EventMessageStop  EventKind = "message_stop"
+	EventContentDelta  EventKind = "content_delta"
+	EventThinkingDelta EventKind = "thinking_delta"
+	EventToolCall      EventKind = "tool_call"
+	EventMessageStop   EventKind = "message_stop"
 )
 
 // Usage 는 토큰 사용량이다.
@@ -103,7 +116,7 @@ type Usage struct {
 // Event 는 스트리밍 출력 이벤트다.
 type Event struct {
 	Kind       EventKind
-	Delta      string    // content_delta
+	Delta      string    // content_delta / thinking_delta
 	ToolCall   *ToolCall // tool_call
 	StopReason string    // message_stop (end_turn/tool_use/max_tokens)
 	Usage      *Usage    // message_stop

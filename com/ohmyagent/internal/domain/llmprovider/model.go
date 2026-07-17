@@ -93,6 +93,25 @@ type ChatMessage struct {
 	ToolCallID string     // role=tool: 어떤 호출에 대한 결과인지
 	ToolCalls  []ToolCall // role=assistant: 모델이 만든 도구 호출
 	Name       string     // 선택적 도구/함수 이름
+
+	// 확장 사고(extended thinking) 재생용. Anthropic 은 thinking 이 켜진 상태에서 도구를 쓰면
+	// 그 턴의 assistant 메시지에 thinking 블록(서명 포함)을 "반드시" 되돌려 보내라고 요구한다.
+	// 빠지면 400 이다. 클라이언트가 직전 assistant 턴의 thinking 원문·서명을 여기 실어 보내면
+	// 어댑터가 tool_use 앞에 thinking 블록으로 복원한다. thinking 미사용 시 둘 다 빈 값.
+	Thinking          string // 모델이 생성한 사고 원문(assistant 턴)
+	ThinkingSignature string // 그 사고 블록의 서명(변조 검증용, 바이트 그대로 보존해야 함)
+}
+
+// ThinkingConfig 는 확장 사고 설정이다(nil = 미사용, 어댑터가 아무것도 보내지 않음).
+//
+// 모델별로 받는 형식이 다르다는 점이 핵심이다:
+//   - Type="adaptive": Opus 4.x/Sonnet 5/Fable 5 등 최신 모델(budget_tokens 는 이들에서 거부됨).
+//   - Type="enabled" + BudgetTokens: Claude 3.7/구형 사고 모델.
+// 서버는 모델 능력을 추측하지 않는다(중계기 원칙) — 클라이언트가 자기 모델에 맞는 형식을 지정하고,
+// 안 맞으면 Anthropic 이 400 을 돌려주며 그대로 사용자에게 표면화된다.
+type ThinkingConfig struct {
+	Type         string // "adaptive" | "enabled"
+	BudgetTokens int    // Type="enabled" 일 때만 사용(>=1024, < max_tokens)
 }
 
 // ChatRequest 는 어댑터에 전달되는 채팅 질의다.
@@ -103,6 +122,7 @@ type ChatRequest struct {
 	Model       string           // 선택적 오버라이드("" = Provider 기본 모델)
 	MaxTokens   int              // 0 = 미지정
 	Temperature *float64         // nil = 미지정
+	Thinking    *ThinkingConfig  // nil = 확장 사고 미사용(기본)
 }
 
 // ChatUsage 는 토큰 사용량이다(제공자가 보고할 때만 채워짐).
@@ -125,11 +145,17 @@ type ChatUsage struct {
 // ChatStreamChunk 는 스트리밍 응답의 한 조각이다.
 // Done=true 이면 마지막 조각(FinishReason/Usage/ToolCalls 동반 가능)이다.
 type ChatStreamChunk struct {
-	Delta        string     // 증분 텍스트
-	ToolCalls    []ToolCall // 완성된 도구 호출(주로 마지막 조각에 동반)
-	FinishReason string     // 제공자 원문 완료 사유(stop/length/tool_calls/end_turn/tool_use 등)
-	Done         bool       // 마지막 조각 여부
-	Usage        *ChatUsage // 최종 조각에서 제공자가 보고한 사용량
+	Delta         string     // 증분 텍스트
+	ThinkingDelta string     // 증분 사고 텍스트(확장 사고 켜졌을 때만). Delta 와 상호배타적으로 채워진다.
+	ToolCalls     []ToolCall // 완성된 도구 호출(주로 마지막 조각에 동반)
+	FinishReason  string     // 제공자 원문 완료 사유(stop/length/tool_calls/end_turn/tool_use 등)
+	Done          bool       // 마지막 조각 여부
+	Usage         *ChatUsage // 최종 조각에서 제공자가 보고한 사용량
+
+	// 최종 조각에서만 채워진다 — 이번 assistant 턴이 생성한 사고 블록의 원문·서명.
+	// 클라이언트가 이력에 저장했다가 다음 요청에 되돌려 보내야 도구 사용 시 400 을 피한다.
+	Thinking          string
+	ThinkingSignature string
 }
 
 // --- 커맨드 ---
