@@ -25,6 +25,9 @@ type Service struct {
 	bc          Broadcaster
 	now         func() time.Time
 	newID       func() string
+	// typingMembers 는 타이핑 전파 전용 멤버 목록 캐시다(고빈도 신호의 DB 부하 제거).
+	// 권한이 걸린 경로는 이 캐시를 쓰지 않는다 — typing_cache.go 주석 참고.
+	typingMembers *memberListCache
 }
 
 // NewService 는 Service 를 생성한다. bc 가 nil 이면 단일 인스턴스(LocalBroadcaster)로 기본 동작한다.
@@ -35,9 +38,10 @@ func NewService(rooms domainmessaging.RoomRepository, messages domainmessaging.M
 	}
 	return &Service{
 		rooms: rooms, messages: messages, attachments: attachments, hub: hub, bc: bc,
-		directory: noopMemberDirectory{},
-		now:       time.Now,
-		newID:     func() string { return uuid.NewString() },
+		directory:     noopMemberDirectory{},
+		now:           time.Now,
+		newID:         func() string { return uuid.NewString() },
+		typingMembers: newMemberListCache(time.Now),
 	}
 }
 
@@ -216,6 +220,7 @@ func (s *Service) KickMember(ctx context.Context, actorID, roomID, targetID stri
 	if err := s.rooms.RemoveMember(ctx, roomID, targetID); err != nil {
 		return err
 	}
+	s.typingMembers.invalidate(roomID) // 강퇴 즉시 반영(옛 목록으로 전파되지 않도록)
 	s.broadcastMember(members, "member_left", roomID, targetID)
 	return nil
 }
@@ -441,22 +446,30 @@ func (s *Service) UnreadByRoom(ctx context.Context, actorID string) (map[string]
 }
 
 // Typing 은 타이핑 상태(start|stop)를 방의 **다른** 멤버에게 중계한다(멤버만, 저장 안 함 — 휘발성).
+//
+// 키 입력마다 오는 고빈도 신호라 DB 왕복을 최소화한다: 멤버 목록을 한 번만 얻어
+// 멤버십 검사와 수신자 추출을 같은 순회에서 끝낸다(예전에는 IsMember + Members 로 2회).
+// 목록은 짧은 TTL 캐시를 거치므로 정상 흐름에서는 쿼리가 아예 나가지 않는다.
 func (s *Service) Typing(ctx context.Context, actorID, roomID, state string) error {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
+	members, err := s.typingRoomMembers(ctx, roomID)
+	if err != nil {
 		return err
 	}
 	if state != "stop" {
 		state = "start"
 	}
-	members, err := s.rooms.Members(ctx, roomID)
-	if err != nil {
-		return err
-	}
+	// 한 번의 순회로 (1) 발신자가 멤버인지 (2) 나머지 수신자가 누구인지를 함께 구한다.
 	others := make([]string, 0, len(members))
+	isMember := false
 	for _, m := range members {
-		if m != actorID { // 발신자 본인(다기기 포함)에겐 안 보냄
-			others = append(others, m)
+		if m == actorID { // 발신자 본인(다기기 포함)에겐 안 보냄
+			isMember = true
+			continue
 		}
+		others = append(others, m)
+	}
+	if !isMember {
+		return domainmessaging.ErrNotMember
 	}
 	if len(others) == 0 {
 		return nil
@@ -544,6 +557,7 @@ func (s *Service) AddMembers(ctx context.Context, actorID, roomID string, member
 	if err := s.rooms.AddMembers(ctx, roomID, added, s.now().UTC().Unix()); err != nil {
 		return nil, err
 	}
+	s.typingMembers.invalidate(roomID) // 신규 멤버가 즉시 타이핑을 받도록
 	all := append(append([]string(nil), existing...), added...)
 	for _, m := range added {
 		s.broadcastMember(all, "member_joined", roomID, m)
@@ -570,6 +584,7 @@ func (s *Service) LeaveRoom(ctx context.Context, actorID, roomID string) error {
 	if err := s.rooms.RemoveMember(ctx, roomID, actorID); err != nil {
 		return err
 	}
+	s.typingMembers.invalidate(roomID) // 나간 즉시 반영
 	remaining := make([]string, 0, len(members))
 	for _, m := range members {
 		if m != actorID {
@@ -591,6 +606,20 @@ func (s *Service) broadcastMember(targets []string, eventType, roomID, memberID 
 	}); err == nil {
 		s.bc.Broadcast(targets, payload)
 	}
+}
+
+// typingRoomMembers 는 타이핑 전파용 멤버 목록을 캐시 우선으로 반환한다.
+// 반환 슬라이스는 캐시와 공유되므로 호출부가 변경해서는 안 된다(읽기 전용).
+func (s *Service) typingRoomMembers(ctx context.Context, roomID string) ([]string, error) {
+	if members, ok := s.typingMembers.get(roomID); ok {
+		return members, nil
+	}
+	members, err := s.rooms.Members(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	s.typingMembers.put(roomID, members)
+	return members, nil
 }
 
 func (s *Service) requireMember(ctx context.Context, roomID, memberID string) error {

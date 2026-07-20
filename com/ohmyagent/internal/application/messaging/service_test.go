@@ -21,6 +21,10 @@ type fakeRepo struct {
 	directs  map[string]string           // directKey -> roomID
 	lastRead map[string]map[string]int64 // roomID -> memberID -> lastReadAt
 	messages []domainmessaging.Message
+
+	// 쿼리 횟수 카운터(타이핑 캐시 검증용).
+	membersCalls  int
+	isMemberCalls int
 }
 
 func newFakeRepo() *fakeRepo {
@@ -95,9 +99,11 @@ func (r *fakeRepo) ListForMember(_ context.Context, memberID string) ([]domainme
 	return out, nil
 }
 func (r *fakeRepo) Members(_ context.Context, roomID string) ([]string, error) {
+	r.membersCalls++
 	return r.members[roomID], nil
 }
 func (r *fakeRepo) IsMember(_ context.Context, roomID, memberID string) (bool, error) {
+	r.isMemberCalls++
 	for _, m := range r.members[roomID] {
 		if m == memberID {
 			return true, nil
