@@ -10,6 +10,7 @@ import (
 
 	domainagent "aiagent/com/ohmyagent/internal/domain/agent"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
+	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 )
 
 // 컴파일 타임 인터페이스 만족 검증.
@@ -20,20 +21,57 @@ type providerResolver interface {
 	GetActiveAdapter(ctx context.Context) (domainllmprovider.Adapter, error)
 }
 
-// AgentService 는 domainagent.Service 구현이다.
-type AgentService struct {
-	providers providerResolver
+// toolPolicyResolver 는 멤버 유효 도구 정책만 얻기 위한 소비자 측 최소 인터페이스다(스펙 §4.4).
+// 전역 정책과 멤버 오버라이드는 이미 병합되어 온다.
+type toolPolicyResolver interface {
+	EffectivePolicy(memberID string) (mode string, enabled, disabled []string)
 }
 
-// NewAgentService 는 활성 어댑터 resolver 를 주입받아 AgentService 를 생성한다.
-func NewAgentService(providers providerResolver) *AgentService {
-	return &AgentService{providers: providers}
+// AgentService 는 domainagent.Service 구현이다.
+type AgentService struct {
+	providers  providerResolver
+	toolPolicy toolPolicyResolver
+}
+
+// NewAgentService 는 활성 어댑터 resolver 와 도구 정책 resolver 를 주입받아 AgentService 를 생성한다.
+func NewAgentService(providers providerResolver, toolPolicy toolPolicyResolver) *AgentService {
+	return &AgentService{providers: providers, toolPolicy: toolPolicy}
+}
+
+// checkToolPolicy 는 요청에 실린 도구를 멤버 유효 정책과 대조한다.
+// 차단 도구가 하나라도 있으면 ErrToolsBlocked 를 반환한다(요청 전체 거부).
+//
+// 서버는 도구를 실행하지 않으므로 실행 자체를 막을 수는 없다. 다만 차단된 도구 스키마를
+// LLM 에 넘기지 않음으로써 "모델이 그 도구를 호출하도록 유도되는" 경로를 끊는다.
+func (s *AgentService) checkToolPolicy(cmd domainagent.ChatCommand) error {
+	if s.toolPolicy == nil || len(cmd.Tools) == 0 {
+		return nil
+	}
+	_, enabled, disabled := s.toolPolicy.EffectivePolicy(cmd.ActorID)
+	if len(enabled) == 0 && len(disabled) == 0 {
+		return nil // 정책 없음 = 전체 허용(빠른 경로)
+	}
+
+	var blocked []domainagent.BlockedTool
+	for _, t := range cmd.Tools {
+		if allowed, reason := domaintoolpolicy.Authorize(enabled, disabled, t.Name); !allowed {
+			blocked = append(blocked, domainagent.BlockedTool{Name: t.Name, Reason: reason})
+		}
+	}
+	if len(blocked) > 0 {
+		return &domainagent.ErrToolsBlocked{Tools: blocked}
+	}
+	return nil
 }
 
 // Stream 은 입력을 검증하고 활성 어댑터로 스트리밍 질의를 위임하며,
 // 어댑터 조각을 에이전트 이벤트(content_delta/tool_call/message_stop)로 변환한다.
 func (s *AgentService) Stream(ctx context.Context, cmd domainagent.ChatCommand, onEvent func(domainagent.Event) error) error {
 	if err := cmd.Validate(); err != nil {
+		return err
+	}
+	// 도구 정책 게이트: 업스트림 호출 전에 막는다(차단 도구가 모델에 노출되지 않도록).
+	if err := s.checkToolPolicy(cmd); err != nil {
 		return err
 	}
 	adapter, err := s.providers.GetActiveAdapter(ctx)

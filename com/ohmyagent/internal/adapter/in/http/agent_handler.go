@@ -326,6 +326,11 @@ func agentErrToHTTP(err error) error {
 	if errors.As(err, &ve) {
 		return ErrBadRequest(ve.Msg)
 	}
+	// 도구 정책 차단 → 403. 메시지에 차단된 도구명을 담아 클라이언트가 조치할 수 있게 한다.
+	var tb *domainagent.ErrToolsBlocked
+	if errors.As(err, &tb) {
+		return ErrForbidden(tb.Error())
+	}
 	if mapped := mapProviderQuotaAuthErr(err); mapped != nil {
 		return mapped
 	}

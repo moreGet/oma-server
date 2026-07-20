@@ -159,7 +159,9 @@ func run() error {
 	messagingService.SetMemberDirectory(dbout.NewMemberDirectoryRepository(conn)) // 채팅 멤버 이름 해석(UUID→username/display_name)
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
 	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
-	agentUC := agentapp.NewAgentService(providerUC) // 에이전트 루프(tools/function-calling) 중계
+	// 에이전트 루프(tools/function-calling) 중계. 도구 정책은 요청 게이트로 강제한다
+	// (차단 도구가 실리면 403 — 모델에 스키마 자체를 넘기지 않는다).
+	agentUC := agentapp.NewAgentService(providerUC, toolPolicyManager)
 	sessionUC := chatsessionapp.NewSessionService(sessionRepo)
 
 	// 5) 시딩: super_admin 은 모든 환경에서 항상 보장(없으면 생성). 샘플 Provider 는 비운영만.

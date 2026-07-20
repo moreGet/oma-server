@@ -289,6 +289,9 @@ data: {"done":true,"finish_reason":"stop","usage":{"prompt_tokens":23,"completio
 - `max_tokens` 는 요청값이 우선하고, 생략하면 Provider 의 `config.max_tokens` 가 서버 기본값으로 쓰인다(둘 다 없으면 모델 기본값).
 - `GET /api/v1/models` 는 등록된 Provider 목록을 보여주지만, **실제 사용 모델은 `active: true` 인 것 하나**다.
   목록에서 고른 모델을 요청에 실어도 반영되지 않는다.
+- **`tools[]` 에 서버 정책상 차단된 도구가 있으면 요청 전체가 403 으로 거부된다**(LLM 호출 없음).
+  판정은 `/tools/authorize` 와 동일하며, 응답 `message` 에 차단된 도구명이 모두 나열된다.
+  상세는 §「차단 도구를 `/agent/chat` 에 실으면 403」 참조.
 
 **응답** (SSE, named events)
 ```
@@ -394,6 +397,31 @@ curl -N -X POST localhost:8080/api/v1/agent/chat \
 | `GET /api/v1/security/command-policy` | 서버 추가 위험명령/경로 차단 패턴 `{blocked_patterns[], blocked_paths[]}`. 클라 내장 디폴트에 **추가만**(2중 안전). 미설정 시 빈 배열 |
 
 > `cached` 모드면 정책은 **로그인 시 1회** 로드(세션 캐시). `enabled`/`disabled`는 nil이면 응답에서 `null`(=전체 허용). `download_url`/`notice`는 빈 값이면 응답에서 생략. 상세 계약은 클라 `docs/server-tool-policy-api.md`·`server-version-api.md`·`server-controlled-security-and-tools.md` 참조.
+
+#### 차단 도구를 `/agent/chat` 에 실으면 403 (서버 강제)
+
+`POST /api/v1/agent/chat` 의 `tools[]` 에 **유효 정책상 차단된 도구가 하나라도 포함되면 요청 전체가 403 으로 거부**된다.
+LLM 호출 자체가 일어나지 않으므로 모델은 그 도구의 존재를 알지 못한다.
+
+```json
+{"error":{"code":"forbidden",
+          "message":"서버 도구 정책에 의해 차단된 도구가 요청에 포함되어 있습니다: run_command, manage_todos"}}
+```
+
+- 판정 기준은 `POST /api/v1/tools/authorize` 와 **완전히 동일**하다(전역 ⊕ 멤버 오버라이드 → `disabled` 우선 → `enabled` 화이트리스트). 두 엔드포인트가 다른 답을 내는 일은 없다.
+- `message` 에 **차단된 도구명이 모두** 나열된다(일부만이 아니라 전부). 클라이언트는 그 도구들을 `tools[]` 에서 제거하고 재요청하면 된다.
+- 도구를 보내지 않는 일반 채팅은 정책과 무관하게 통과한다.
+- 정책이 비어 있으면(전역·멤버 모두 미설정) 전체 허용이므로 이 검사는 아무 영향이 없다.
+
+**클라이언트 권장 처리**: 로그인 직후 `GET /api/v1/tools/policy` 로 받은 `disabled`/`enabled` 를 반영해
+**애초에 차단 도구를 `tools[]` 에 넣지 않는 것**이 정상 경로다. 403 은 정책이 바뀌었거나(세션 캐시가 낡음)
+클라가 정책을 무시했을 때의 안전망이다. 403 을 받으면 정책을 재조회한 뒤 도구 목록을 갱신하는 것이 좋다.
+
+> **설계 노트**: 차단 도구를 조용히 걸러내지 않고 거부하는 이유는, 필터링하면 클라이언트가 자기 도구가
+> 빠진 줄 모른 채 "모델이 그 도구를 안 쓴다" 로만 관측하게 되기 때문이다. 어떤 도구가 왜 막혔는지
+> 돌려줘야 클라이언트가 사용자에게 알리거나 목록을 고칠 수 있다.
+> 서버는 도구를 실행하지 않으므로 실행 자체를 막을 수는 없고, 이 게이트는 **모델이 차단 도구를 호출하도록
+> 유도되는 경로를 끊는** 역할이다(실행 시점 방어는 `realtime` 모드의 `/tools/authorize`).
 
 #### `GET /api/v1/security/command-policy` (user) — 서버 제어형 위험명령 차단
 **2중 안전 원칙**: 클라이언트 내장 디폴트 블랙리스트는 항상 적용되고, 서버는 패턴을 **추가만** 한다(끄는 필드 없음). 로그인 시 1회 로드·세션 캐시. 미구현/오프라인이면 클라 디폴트만으로 정상 동작.

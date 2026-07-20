@@ -10,6 +10,27 @@ type ErrValidation struct{ Msg string }
 
 func (e *ErrValidation) Error() string { return e.Msg }
 
+// BlockedTool 은 서버 도구 정책에 걸린 도구 1건이다.
+type BlockedTool struct {
+	Name   string
+	Reason string
+}
+
+// ErrToolsBlocked 는 요청에 서버 정책상 쓸 수 없는 도구가 포함됐음을 나타내는 typed 에러다. → 403
+//
+// 요청을 조용히 필터링하지 않고 거부하는 이유: 필터링하면 클라이언트는 자기가 보낸 도구가
+// 빠진 줄 모른 채 "모델이 그 도구를 안 쓰네" 로만 관측하게 된다. 어떤 도구가 왜 막혔는지
+// 돌려줘야 클라이언트가 그 도구를 목록에서 빼거나 사용자에게 알릴 수 있다.
+type ErrToolsBlocked struct{ Tools []BlockedTool }
+
+func (e *ErrToolsBlocked) Error() string {
+	names := make([]string, 0, len(e.Tools))
+	for _, t := range e.Tools {
+		names = append(names, t.Name)
+	}
+	return "서버 도구 정책에 의해 차단된 도구가 요청에 포함되어 있습니다: " + strings.Join(names, ", ")
+}
+
 // Role 은 대화 메시지 역할이다.
 type Role string
 

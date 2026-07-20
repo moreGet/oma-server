@@ -185,6 +185,37 @@ func ResolveEffective(global Settings, member *MemberPolicy) (mode string, enabl
 	return mode, enabled, disabled
 }
 
+// 도구 인가 거부 사유(클라이언트에 그대로 전달되는 문구).
+const (
+	ReasonBlocked        = "서버 정책에 의해 차단된 도구입니다"
+	ReasonNotInAllowlist = "허용 목록에 없는 도구입니다"
+)
+
+// Authorize 는 유효 정책(ResolveEffective 결과)으로 도구 1건의 허용 여부를 판정한다.
+// 허용이면 reason 은 빈 문자열이다.
+//
+// 규칙: disabled 가 우선하고, 그 다음 enabled 화이트리스트를 본다(enabled 가 비면 전체 허용).
+//
+// 이 함수가 도구 인가의 **단일 진실**이다. `/tools/authorize`(클라이언트가 실행 직전에 묻는
+// realtime 게이트)와 `/agent/chat`(요청에 차단 도구가 실렸는지 보는 게이트)이 같은 판정을
+// 써야 한다 — 둘이 갈라지면 클라이언트는 허가받은 도구가 요청에서 거부되는 모순을 만난다.
+func Authorize(enabled, disabled []string, tool string) (allowed bool, reason string) {
+	for _, d := range disabled {
+		if d == tool {
+			return false, ReasonBlocked
+		}
+	}
+	if len(enabled) == 0 {
+		return true, ""
+	}
+	for _, e := range enabled {
+		if e == tool {
+			return true, ""
+		}
+	}
+	return false, ReasonNotInAllowlist
+}
+
 // unionStrings 는 a 다음에 b 의 신규 항목을 이어붙인 합집합(순서 보존, 중복 제거)이다.
 func unionStrings(a, b []string) []string {
 	if len(a) == 0 {

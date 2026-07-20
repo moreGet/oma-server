@@ -80,24 +80,15 @@ func (h *ClientHandler) ToolsAuthorize(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
+// authorize 는 도메인 판정(단일 진실)에 위임한다.
+// 같은 규칙을 /agent/chat 의 요청 게이트도 쓴다 — 여기에 로직을 복제하면 둘이 갈라진다.
 func (h *ClientHandler) authorize(memberID, tool string) (bool, *string) {
 	_, enabled, disabled := h.policy.EffectivePolicy(memberID)
-	for _, d := range disabled {
-		if d == tool {
-			reason := "서버 정책에 의해 차단된 도구입니다"
-			return false, &reason
-		}
+	allowed, reason := domaintoolpolicy.Authorize(enabled, disabled, tool)
+	if allowed {
+		return true, nil
 	}
-	if len(enabled) > 0 {
-		for _, e := range enabled {
-			if e == tool {
-				return true, nil
-			}
-		}
-		reason := "허용 목록에 없는 도구입니다"
-		return false, &reason
-	}
-	return true, nil
+	return false, &reason
 }
 
 // --- GET /api/v1/client/version (연결·인증 직후 1회) ---
