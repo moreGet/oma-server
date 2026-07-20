@@ -1,6 +1,8 @@
 server:
   port: 8080
-  read_timeout: "10s"
+  # 본문 전체 수신까지 포함하는 상한. agent/chat 은 최대 32MiB(첨부 인라인)를 받으므로
+  # 10s 면 느린 회선에서 본문이 잘려 위양성 400 이 난다. slowloris 는 ReadHeaderTimeout 이 따로 막는다.
+  read_timeout: "120s"
   write_timeout: "10s"
 security:
   allowed_origins: [ ] # 비면 CORS 비활성(로컬)

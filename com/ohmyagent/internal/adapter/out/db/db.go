@@ -58,7 +58,37 @@ func Open(driver, dsn string, maxOpenConns int) (*sql.DB, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("db: ping %s: %w", driver, err)
 	}
+
+	if driver == "sqlite" {
+		if err := applySQLitePragmas(conn); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	}
 	return conn, nil
+}
+
+// applySQLitePragmas 는 sqlite 동시성 파라미터를 강제한다.
+//
+// DSN 에 적는 대신 여기서 거는 이유: DSN 은 환경마다 손으로 쓰고(env 주입 포함) 빠뜨리기 쉬운데,
+// WAL 미적용은 조용히 성능만 무너뜨려서 눈치채기 어렵다.
+//
+//   - journal_mode=WAL: 기본 rollback journal 은 **writer 가 모든 reader 를 막는다**.
+//     MaxOpenConns=1 과 겹치면 모든 읽기·쓰기가 커넥션 하나에 직렬화되어, 동시 접속이 늘수록
+//     풀 대기가 지연을 지배한다(SSE 는 첫 바이트 전 쿼터 검사에서 막힌다). WAL 은 reader 와
+//     writer 가 서로를 막지 않는다.
+//   - synchronous=NORMAL: WAL 에서 권장 조합. 커밋마다 fsync 하지 않아 쓰기 지연이 크게 준다
+//     (OS 크래시 시 마지막 트랜잭션 유실 가능, DB 손상은 없음).
+func applySQLitePragmas(conn *sql.DB) error {
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+	} {
+		if _, err := conn.Exec(pragma); err != nil {
+			return fmt.Errorf("db: %s: %w", pragma, err)
+		}
+	}
+	return nil
 }
 
 // sqlDriverName 은 config 드라이버명(mysql/sqlite)을 database/sql 드라이버명으로 매핑한다.
