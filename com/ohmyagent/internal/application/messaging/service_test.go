@@ -1,8 +1,10 @@
 package messagingapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,9 +48,9 @@ func (s *fakeAttStore) Put(_ context.Context, a domainmessaging.StoredAttachment
 	}{a, data}
 	return nil
 }
-func (s *fakeAttStore) Get(_ context.Context, id string) (domainmessaging.StoredAttachment, []byte, error) {
+func (s *fakeAttStore) Open(_ context.Context, id string) (domainmessaging.StoredAttachment, io.ReadCloser, error) {
 	if v, ok := s.atts[id]; ok {
-		return v.meta, v.data, nil
+		return v.meta, io.NopCloser(bytes.NewReader(v.data)), nil
 	}
 	return domainmessaging.StoredAttachment{}, nil, domainmessaging.ErrAttachmentNotFound
 }
@@ -705,8 +707,11 @@ func TestService_Attachments(t *testing.T) {
 	assert.Equal(t, int64(10), a.SizeBytes)
 	assert.Equal(t, "/api/v1/chat/attachments/"+a.ID, a.URL)
 
-	sa, data, err := s.DownloadAttachment(ctx, a.ID)
+	sa, rc, err := s.DownloadAttachment(ctx, a.ID)
 	require.NoError(t, err)
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.NoError(t, rc.Close())
 	assert.Equal(t, "photo.png", sa.FileName)
 	assert.Equal(t, "image/png", sa.ContentType)
 	assert.Equal(t, "u1", sa.UploaderID)

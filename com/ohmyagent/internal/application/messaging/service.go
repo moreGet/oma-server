@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"time"
 
@@ -250,9 +251,10 @@ func (s *Service) UploadAttachment(ctx context.Context, uploaderID, fileName, co
 	}, nil
 }
 
-// DownloadAttachment 는 저장된 첨부의 메타데이터 + 바이너리를 반환한다.
-func (s *Service) DownloadAttachment(ctx context.Context, id string) (domainmessaging.StoredAttachment, []byte, error) {
-	return s.attachments.Get(ctx, id)
+// DownloadAttachment 는 저장된 첨부의 메타데이터와 바이너리 스트림을 반환한다.
+// 호출자가 반드시 Close 해야 한다(스트림은 크기와 무관하게 상수 메모리로 읽힌다).
+func (s *Service) DownloadAttachment(ctx context.Context, id string) (domainmessaging.StoredAttachment, io.ReadCloser, error) {
+	return s.attachments.Open(ctx, id)
 }
 
 // --- 어드민(전체 조회/모더레이션) — 인가는 호출하는 web 어드민 레이어(CanManage)에서 강제 ---

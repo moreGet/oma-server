@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -38,7 +39,7 @@ type messagingService interface {
 	RoomPresence(ctx context.Context, actorID, roomID string) ([]string, error)
 	MentionsFeed(ctx context.Context, actorID string, limit int) ([]domainmessaging.Message, error)
 	UploadAttachment(ctx context.Context, uploaderID, fileName, contentType string, data []byte) (domainmessaging.Attachment, error)
-	DownloadAttachment(ctx context.Context, id string) (domainmessaging.StoredAttachment, []byte, error)
+	DownloadAttachment(ctx context.Context, id string) (domainmessaging.StoredAttachment, io.ReadCloser, error)
 	Connect(ctx context.Context, memberID string) *messagingapp.Client
 	Disconnect(ctx context.Context, c *messagingapp.Client)
 }
@@ -453,16 +454,24 @@ func (h *MessagingHandler) UploadAttachment(w http.ResponseWriter, r *http.Reque
 
 // DownloadAttachment 는 GET /api/v1/chat/attachments/{aid} — 첨부 바이너리 스트리밍(인증 필요).
 func (h *MessagingHandler) DownloadAttachment(w http.ResponseWriter, r *http.Request) error {
-	sa, data, err := h.svc.DownloadAttachment(r.Context(), r.PathValue("aid"))
+	sa, body, err := h.svc.DownloadAttachment(r.Context(), r.PathValue("aid"))
 	if err != nil {
 		return messagingErr(err)
 	}
+	defer func() { _ = body.Close() }()
+
 	w.Header().Set("Content-Type", sa.ContentType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Content-Length", strconv.FormatInt(sa.SizeBytes, 10))
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(sa.FileName))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+
+	// 헤더를 이미 보냈으므로 이 지점 이후의 실패는 상태코드로 바꿀 수 없다.
+	// 응답은 Content-Length 보다 짧게 끊기고, 원인은 서버 로그로만 남긴다.
+	if _, err := io.Copy(w, body); err != nil {
+		slog.Error("attachment download interrupted", "event", "attachment.download_failed",
+			"attachment_id", sa.ID, "size_bytes", sa.SizeBytes, "error", err)
+	}
 	return nil
 }
 

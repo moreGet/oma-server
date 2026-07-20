@@ -5,6 +5,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"io"
 )
 
 // RoomType 은 방 종류다.
@@ -65,8 +66,13 @@ type StoredAttachment struct {
 type AttachmentStore interface {
 	// Put 은 첨부 메타데이터 + 바이너리를 저장한다.
 	Put(ctx context.Context, a StoredAttachment, data []byte) error
-	// Get 은 첨부 메타데이터 + 바이너리를 반환한다(없으면 ErrAttachmentNotFound).
-	Get(ctx context.Context, id string) (StoredAttachment, []byte, error)
+	// Open 은 첨부 메타데이터와 바이너리 **스트림**을 반환한다(없으면 ErrAttachmentNotFound).
+	// 호출자가 반드시 Close 해야 한다.
+	//
+	// 바이너리를 []byte 로 한 번에 돌려주지 않는 이유: 파일 크기 × 동시 다운로드 수만큼
+	// 메모리가 필요해져 대용량 첨부에서 OOM 으로 이어진다. 구현은 크기와 무관하게
+	// 상수 메모리로 읽어야 한다.
+	Open(ctx context.Context, id string) (StoredAttachment, io.ReadCloser, error)
 	// Stats 는 첨부 개수와 총 바이트 수를 반환한다(어드민 집계).
 	Stats(ctx context.Context) (count int, totalBytes int64, err error)
 }
