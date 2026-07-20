@@ -186,7 +186,14 @@ func (s *ProviderService) Delete(ctx context.Context, cmd domainllmprovider.Dele
 // providerTestTimeout 은 연결 테스트 1회의 한도다.
 const providerTestTimeout = 10 * time.Second
 
-// TestConnection 은 지정 Provider 로 최소 질의(1토큰)를 보내 연결을 검증한다(admin↑).
+// providerTestMaxTokens 는 연결 테스트 프로브의 출력 토큰 상한이다.
+//
+// 비용을 아끼려면 1 이 좋지만 OpenAI Responses API 는 max_output_tokens 최소가 16 이라
+// 1 을 보내면 연결 자체는 멀쩡한데 400(integer_below_min_value)으로 실패한다.
+// 16 은 chat/completions·Anthropic·Gemini·Ollama 어디서도 문제되지 않는 최소 공통값이다.
+const providerTestMaxTokens = 16
+
+// TestConnection 은 지정 Provider 로 최소 질의를 보내 연결을 검증한다(admin↑).
 // 성공 시 nil, 외부 호출 실패 시 ErrUpstream(또는 도메인 에러)을 반환한다.
 func (s *ProviderService) TestConnection(ctx context.Context, actorID, id string) error {
 	if err := s.gate.RequireAdmin(ctx, actorID); err != nil {
@@ -204,7 +211,7 @@ func (s *ProviderService) TestConnection(ctx context.Context, actorID, id string
 	defer cancel()
 	req := domainllmprovider.ChatRequest{
 		Messages:  []domainllmprovider.ChatMessage{{Role: domainllmprovider.ChatRoleUser, Content: "ping"}},
-		MaxTokens: 1,
+		MaxTokens: providerTestMaxTokens,
 	}
 	if err := adapter.ChatStream(testCtx, req, func(domainllmprovider.ChatStreamChunk) error { return nil }); err != nil {
 		slog.Warn("provider connection test failed", "event", "provider.test",

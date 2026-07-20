@@ -115,12 +115,14 @@ func (c *fakeCache) Invalidate() {
 
 // fakeAdapter implements domainllmprovider.Adapter.
 type fakeAdapter struct {
-	pt domainllmprovider.ProviderType
+	pt      domainllmprovider.ProviderType
+	lastReq domainllmprovider.ChatRequest
 }
 
 var _ domainllmprovider.Adapter = (*fakeAdapter)(nil)
 
 func (a *fakeAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
+	a.lastReq = req
 	return onChunk(domainllmprovider.ChatStreamChunk{Done: true})
 }
 func (a *fakeAdapter) ProviderType() domainllmprovider.ProviderType { return a.pt }
@@ -128,6 +130,7 @@ func (a *fakeAdapter) ProviderType() domainllmprovider.ProviderType { return a.p
 // fakeFactory implements domainllmprovider.Factory.
 type fakeFactory struct {
 	lastProvider domainllmprovider.LLMProvider
+	lastAdapter  *fakeAdapter
 	calls        int
 	err          error
 }
@@ -140,7 +143,8 @@ func (f *fakeFactory) CreateAdapter(p domainllmprovider.LLMProvider) (domainllmp
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &fakeAdapter{pt: p.ProviderType}, nil
+	f.lastAdapter = &fakeAdapter{pt: p.ProviderType}
+	return f.lastAdapter, nil
 }
 
 // noopCipher implements domainllmprovider.Cipher as identity (test only):
@@ -256,6 +260,51 @@ func TestProviderService_Create(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.Equal(t, 0, cache.invalidateCall)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestConnection
+// ---------------------------------------------------------------------------
+
+func TestProviderService_TestConnection(t *testing.T) {
+	ctx := context.Background()
+
+	newSvcWithProvider := func() (*ProviderService, *fakeFactory) {
+		repo := newFakeRepo()
+		repo.byID["p1"] = domainllmprovider.LLMProvider{
+			ID: "p1", Name: "openai", ProviderType: domainllmprovider.ProviderTypeExternal,
+		}
+		factory := &fakeFactory{}
+		return NewProviderService(repo, &fakeCache{}, factory, &noopCipher{}, &fakeGate{}), factory
+	}
+
+	// 회귀: 프로브가 MaxTokens=1 이었다. OpenAI Responses API 는 max_output_tokens 최소가
+	// 16 이라, 연결은 멀쩡한데 400(integer_below_min_value)으로 실패했다.
+	t.Run("프로브 max_tokens 는 Responses 최소값 이상이어야 한다", func(t *testing.T) {
+		svc, factory := newSvcWithProvider()
+
+		require.NoError(t, svc.TestConnection(ctx, "admin1", "p1"))
+
+		require.NotNil(t, factory.lastAdapter)
+		assert.GreaterOrEqual(t, factory.lastAdapter.lastReq.MaxTokens, 16,
+			"Responses API 의 max_output_tokens 최소값(16) 이상이어야 400 이 나지 않는다")
+	})
+
+	t.Run("gate 거부 시 어댑터를 만들지 않는다", func(t *testing.T) {
+		repo := newFakeRepo()
+		repo.byID["p1"] = domainllmprovider.LLMProvider{ID: "p1"}
+		factory := &fakeFactory{}
+		svc := NewProviderService(repo, &fakeCache{}, factory, &noopCipher{}, &fakeGate{err: errDenied})
+
+		require.Error(t, svc.TestConnection(ctx, "a", "p1"))
+		assert.Equal(t, 0, factory.calls)
+	})
+
+	t.Run("없는 provider 는 ErrNotFound", func(t *testing.T) {
+		svc, _ := newSvcWithProvider()
+		err := svc.TestConnection(ctx, "admin1", "없음")
+		assert.ErrorIs(t, err, domainllmprovider.ErrNotFound)
 	})
 }
 
