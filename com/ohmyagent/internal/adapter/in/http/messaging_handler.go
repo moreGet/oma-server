@@ -403,21 +403,43 @@ func (h *MessagingHandler) Mentions(w http.ResponseWriter, r *http.Request) erro
 	return nil
 }
 
+// multipartMemoryBudget 은 멀티파트 파싱이 **메모리에 유지할** 상한이다. 이보다 큰 파트는
+// 임시 파일로 스필되어 RAM 을 점유하지 않는다.
+//
+// 주의: ParseMultipartForm 의 인자는 "허용 최대 크기"가 아니라 "메모리 한도"다. 여기에
+// MaxAttachmentBytes 를 주면 스필이 아예 일어나지 않아 10MiB 파일이 통째로 RAM 에 남는다.
+// 동시 업로드 수만큼 곱해지므로 100 건이면 GiB 단위가 된다 — 인증된 사용자면 누구나 칠 수 있다.
+const multipartMemoryBudget = 1 << 20 // 1 MiB
+
 // UploadAttachment 는 POST /api/v1/chat/attachments — multipart 파일 업로드 → 첨부 메타데이터(다운로드 URL).
 func (h *MessagingHandler) UploadAttachment(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
 	// 본문 크기 상한(헤더/멀티파트 오버헤드 여유 1MiB).
 	r.Body = http.MaxBytesReader(w, r.Body, domainmessaging.MaxAttachmentBytes+(1<<20))
-	if err := r.ParseMultipartForm(domainmessaging.MaxAttachmentBytes + (1 << 20)); err != nil {
+	if err := r.ParseMultipartForm(multipartMemoryBudget); err != nil {
 		return ErrBadRequest("file too large or invalid multipart form")
 	}
+	// 스필된 임시 파일을 핸들러 종료 시 즉시 정리한다(서버도 요청 종료 시 정리하지만 더 일찍 반납).
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		return ErrBadRequest("missing form file 'file'")
 	}
 	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(file)
-	if err != nil {
+
+	// 크기를 먼저 보고 초과분은 읽기 전에 거부한다(10MiB 를 다 읽고 나서 버리지 않도록).
+	if header.Size > domainmessaging.MaxAttachmentBytes {
+		return messagingErr(domainmessaging.ErrAttachmentTooLarge)
+	}
+	// io.ReadAll 은 512B 에서 시작해 배로 늘려가며 재할당한다 — 10MiB 면 십수 회 복사에
+	// 순간 최대 2배를 점유한다. 크기를 알고 있으므로 정확히 한 번만 할당한다.
+	data := make([]byte, header.Size)
+	if _, err := io.ReadFull(file, data); err != nil {
 		return ErrBadRequest("failed to read file")
 	}
 	contentType := header.Header.Get("Content-Type")
