@@ -38,9 +38,54 @@ type ProviderConfig struct {
 	APIKeyEnv string `json:"api_key_env,omitempty"` // 환경변수명만 저장(시크릿 아님)
 	// APIKey 는 DB(config_json)에 **AES-GCM 암호문**으로 저장된다. 어댑터에 전달될 때만
 	// 유스케이스가 복호화한 평문으로 채운다. 응답 DTO 에는 절대 노출하지 않는다(마스킹).
-	APIKey      string         `json:"api_key,omitempty"`
-	MaxTokens   int            `json:"max_tokens,omitempty"`
+	APIKey    string `json:"api_key,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	// Reasoning 은 추론 강도(OpenAI reasoning_effort)다. 빈 값 = 미지정(파라미터 자체를 보내지 않음).
+	//
+	// 클라이언트는 이 값을 지정할 수 없다 — 서버(관리자)가 Provider 단위로 정하고 모든 요청이 그것을 따른다.
+	// 확장 사고(ThinkingConfig)가 클라이언트 주도인 것과 반대 방향이며, 의도적이다.
+	Reasoning string `json:"reasoning,omitempty"`
+	// APIStyle 은 OpenAI 호출 방식이다. 빈 값/chat_completions = /v1/chat/completions(기본),
+	// responses = /v1/responses.
+	//
+	// 자동 판별하지 않는 이유: /v1/chat/completions 만 구현한 OpenAI 호환 서버(vLLM·LiteLLM 등)가
+	// 많아서, 서버가 임의로 /v1/responses 로 바꾸면 그런 엔드포인트가 조용히 깨진다.
+	// 추론(reasoning)과 도구(function tools)를 동시에 쓰려면 responses 가 필요하다.
+	APIStyle    string         `json:"api_style,omitempty"`
 	ExtraParams map[string]any `json:"extra_params,omitempty"`
+}
+
+// OpenAI 호출 방식.
+const (
+	APIStyleChatCompletions = "chat_completions"
+	APIStyleResponses       = "responses"
+)
+
+// APIStyles 는 선택 가능한 호출 방식이다(빈 값 = chat_completions 기본).
+var APIStyles = []string{APIStyleChatCompletions, APIStyleResponses}
+
+// UsesResponsesAPI 는 /v1/responses 방식인지 반환한다.
+func (c ProviderConfig) UsesResponsesAPI() bool {
+	return c.APIStyle == APIStyleResponses
+}
+
+// ReasoningEfforts 는 허용되는 추론 강도 값이다(빈 값 = 미지정은 별도 허용).
+//
+// 관리자 오타가 벤더의 불투명한 400 으로만 드러나는 걸 막기 위한 방어선이다.
+// 벤더가 새 값을 추가하면 이 슬라이스에 한 줄 추가하면 된다.
+var ReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// ValidReasoning 은 추론 강도 값이 허용 목록에 있는지 검사한다(빈 값 = 미지정도 유효).
+func ValidReasoning(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, v := range ReasoningEfforts {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 // LLMProvider 는 도메인 애그리거트 루트.
@@ -218,6 +263,8 @@ func (c *ProviderConfig) Normalize() {
 	c.Model = strings.TrimSpace(c.Model)
 	c.APIKeyEnv = strings.TrimSpace(c.APIKeyEnv)
 	c.APIKey = strings.TrimSpace(c.APIKey)
+	c.Reasoning = strings.ToLower(strings.TrimSpace(c.Reasoning))
+	c.APIStyle = strings.ToLower(strings.TrimSpace(c.APIStyle))
 }
 
 // Validate 는 ProviderConfig 의 형식·보안 제약을 검증한다.
@@ -226,6 +273,12 @@ func (c *ProviderConfig) Normalize() {
 func (c ProviderConfig) Validate() error {
 	if c.APIKeyEnv != "" && !validEnvVarName(c.APIKeyEnv) {
 		return &ErrValidation{Msg: "api_key_env must be an environment variable NAME (e.g. OPENAI_API_KEY), not the key value"}
+	}
+	if !ValidReasoning(c.Reasoning) {
+		return &ErrValidation{Msg: "reasoning must be one of " + strings.Join(ReasoningEfforts, ", ") + " (or empty)"}
+	}
+	if c.APIStyle != "" && c.APIStyle != APIStyleChatCompletions && c.APIStyle != APIStyleResponses {
+		return &ErrValidation{Msg: "api_style must be one of " + strings.Join(APIStyles, ", ") + " (or empty)"}
 	}
 	return nil
 }

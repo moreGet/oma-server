@@ -48,11 +48,9 @@ func (a *ClaudeAdapter) ProviderType() domainllmprovider.ProviderType {
 	return domainllmprovider.ProviderTypeExternal
 }
 
-// resolveModel 은 요청 모델 → 설정 모델 → 기본값 순으로 사용할 모델을 결정한다.
-func (a *ClaudeAdapter) resolveModel(reqModel string) string {
-	if reqModel != "" {
-		return reqModel
-	}
+// resolveModel 은 사용할 모델을 결정한다.
+// 모델은 서버(관리자)의 Provider 설정으로만 정해지며 클라이언트 요청은 무시한다.
+func (a *ClaudeAdapter) resolveModel(_ string) string {
 	if a.model != "" {
 		return a.model
 	}

@@ -101,9 +101,47 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 | `PUT /api/v1/llm-providers/{id}/activate` | admin |
 | `DELETE /api/v1/llm-providers/{id}` | admin |
 
-Provider `config` 필드: `endpoint`, `model`, `max_tokens`, `extra_params`, 그리고 API 키는 **둘 중 하나**:
+Provider `config` 필드: `endpoint`, `model`, `max_tokens`, `reasoning`, `api_style`, `extra_params`, 그리고 API 키는 **둘 중 하나**:
 - `api_key_env`: 시크릿 환경변수 **이름**만 저장(예: `OPENAI_API_KEY`). 환경변수 이름 형식만 허용(키 값 직접 입력 시 400).
 - `api_key`: 키 값 **직접 등록**(입력 전용 평문). 서버가 **AES-GCM 암호화**하여 DB 저장하며(`APP_ENCRYPTION_SECRET` 필요, 미설정 시 400), **응답에는 절대 노출하지 않고** `api_key_set: true/false`(마스킹)로만 표시. 설정 수정 시 `api_key`를 비우면 기존 키를 보존.
+
+**활성 Provider 는 항상 정확히 하나다.** `POST /llm-providers`(`is_active: true`)와 `PUT /llm-providers/{id}/activate`
+모두 단일 트랜잭션으로 "전체 비활성 → 지정 건만 활성"을 수행한다. 활성 Provider 가 여럿이면 어떤 것이
+선택될지 보장되지 않으므로, 이 불변식은 서버가 강제한다.
+
+### 추론 강도 (`config.reasoning`) — 서버 전용 설정
+
+OpenAI `reasoning_effort` 에 대응한다. 허용 값: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
+**빈 값(기본) = 미지정** — 파라미터를 아예 보내지 않아 모델의 기본 동작을 그대로 둔다. 목록 밖의 값은 400.
+
+**클라이언트는 이 값을 지정할 수 없다.** `POST /api/v1/agent/chat` 과 `POST /api/v1/chat` 요청 본문에는
+추론 강도 필드가 없으며, 관리자가 Provider 단위로 정한 값이 모든 요청에 적용된다.
+(클라이언트 주도인 확장 사고 `thinking` 과 반대 방향이며, 의도된 설계다.)
+
+설정 위치: 어드민 `/admin/providers` 의 Provider 카드 → `reasoning` 셀렉트, 또는
+`PATCH /api/v1/llm-providers/{id}/config` 의 `config.reasoning`.
+
+### OpenAI 호출 방식 (`config.api_style`) — 추론+도구 동시 사용
+
+| 값 | 호출 경로 | 추론 + 도구 동시 사용 |
+|---|---|---|
+| `chat_completions` (기본, 빈 값 포함) | `/v1/chat/completions` | ❌ 모델에 따라 400 |
+| `responses` | `/v1/responses` | ✅ 가능 |
+
+`/v1/chat/completions` 는 function tools 와 `reasoning_effort` 를 함께 쓸 수 없는 모델이 있다(예: `gpt-5.6-luna`).
+그 조합이면 벤더가 400 을 반환한다:
+`"Function tools with reasoning_effort are not supported for {model} in /v1/chat/completions."`
+
+에이전트(`/agent/chat`)는 **항상 도구 스키마를 함께 보내므로**, 추론을 쓰려면 `api_style: "responses"` 가 필요하다.
+`chat_completions` 로 남기려면 `reasoning` 을 `none` 으로 두어야 한다.
+
+**자동 판별하지 않는다.** `/v1/chat/completions` 만 구현한 OpenAI 호환 서버(vLLM·LiteLLM 등)가 많아
+서버가 임의로 경로를 바꾸면 그런 엔드포인트가 조용히 깨지기 때문이다. 관리자가 명시적으로 고른다.
+
+`responses` 사용 시 동작 차이:
+- 추론 요약이 오면 `thinking_delta` SSE 이벤트로 전달된다(확장 사고와 같은 채널).
+- 사용량 필드는 내부적으로 정규화되어 클라이언트 계약(`prompt_tokens`/`completion_tokens`/`total_tokens`)은 동일하다.
+- 도구 호출 `id` 는 그대로 되돌려 보내면 된다(클라이언트 계약 불변).
 
 ---
 
@@ -187,9 +225,12 @@ data: {"done":true,"finish_reason":"stop","usage":{"prompt_tokens":23,"completio
    curl -X POST localhost:8080/api/v1/llm-providers \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"name":"openai","provider_type":"EXTERNAL","is_active":true,
-          "config":{"model":"gpt-4o-mini","api_key_env":"OPENAI_API_KEY"}}'
+          "config":{"model":"gpt-5.6-luna","api_key_env":"OPENAI_API_KEY","reasoning":"none"}}'
    ```
+   `reasoning` 은 선택이며 생략하면 미지정(모델 기본값)이다. 다만 **에이전트(`/agent/chat`)로 도구를 쓸
+   모델이라면 `"none"` 이 필요할 수 있다** — 위 「추론 강도」 절의 경고 참조.
 3. (필요 시) 활성화: `PUT /api/v1/llm-providers/{id}/activate`
+   — `is_active: true` 로 생성했다면 이미 배타 활성화되어 있다.
 4. 질의:
    ```bash
    curl -N -X POST localhost:8080/api/v1/chat \
@@ -242,6 +283,12 @@ data: {"done":true,"finish_reason":"stop","usage":{"prompt_tokens":23,"completio
 }
 ```
 - `messages[].attachments[]`: `{file_name, content_type, size_bytes, data_base64}` (요구 D). 텍스트 계열(`text/*`,`application/json` 등)은 본문에 인라인, 그 외(이미지/PDF)는 메타 노트만. 파일당 ≤10MiB, 허용 MIME 외엔 400.
+- **`model` 과 `reasoning` 은 서버가 정한다.** 요청의 `model` 필드는 **무시**되며(하위호환을 위해 받기만 한다),
+  추론 강도 필드는 스키마에 아예 없다. 실제 전송값은 활성 Provider 의 `config.model` / `config.reasoning`
+  (관리자 설정)에서만 결정된다. 모델을 바꾸려면 어드민에서 Provider 설정을 바꾸거나 다른 Provider 를 활성화한다.
+- `max_tokens` 는 요청값이 우선하고, 생략하면 Provider 의 `config.max_tokens` 가 서버 기본값으로 쓰인다(둘 다 없으면 모델 기본값).
+- `GET /api/v1/models` 는 등록된 Provider 목록을 보여주지만, **실제 사용 모델은 `active: true` 인 것 하나**다.
+  목록에서 고른 모델을 요청에 실어도 반영되지 않는다.
 
 **응답** (SSE, named events)
 ```
@@ -261,6 +308,61 @@ data: {"stop_reason":"tool_use","usage":{"prompt_tokens":52,"completion_tokens":
   → `tool_use` 면 클라이언트가 도구 실행 후 `tool` 메시지로 재요청(루프 지속), `end_turn` 이면 종료.
 - 스트리밍 중 오류: `event: error` `data: {"error":{"code":"backend_error","message":"..."}}`.
 - function-calling 지원: OpenAI(`tools`), Claude(Anthropic `tools`/`tool_use`), Ollama(모델 의존, best-effort).
+
+#### 실 API 테스트 절차 (검증됨: gpt-5.6-luna + `api_style=responses` + `reasoning=medium`)
+
+아래는 실제로 실행해 응답을 확인한 시퀀스다. `$T` 는 로그인 토큰.
+
+**0) 로그인**
+```bash
+T=$(curl -s -X POST localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | jq -r .token)
+```
+
+**1) Provider 설정**(추론+도구를 함께 쓰려면 `api_style: responses` 필수)
+```bash
+curl -X PATCH localhost:8080/api/v1/llm-providers/{id}/config \
+  -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"config":{"model":"gpt-5.6-luna","endpoint":"https://api.openai.com/v1",
+       "api_key_env":"OPENAI_API_KEY","reasoning":"medium","api_style":"responses"}}'
+```
+
+**2) 도구 호출 유도** — 1턴
+```bash
+curl -N -X POST localhost:8080/api/v1/agent/chat \
+  -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"main.go 읽어줘. 반드시 read_file 도구를 써."}],
+       "tools":[{"name":"read_file","description":"Read a file from disk",
+                 "parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}],
+       "max_tokens":2048}'
+```
+실제 응답:
+```
+event: message_start
+data: {"role":"assistant"}
+
+event: tool_call
+data: {"id":"call_3h6gT2xmWpBc2aBugVon80U0","name":"read_file","arguments":"{\"path\":\"main.go\"}"}
+
+event: message_stop
+data: {"stop_reason":"tool_use","usage":{"prompt_tokens":59,"completion_tokens":39,"total_tokens":98}}
+```
+
+**3) 도구 결과 반환** — 2턴(`tool_call_id` 에 위 `id` 를 그대로 넣는다)
+```bash
+curl -N -X POST localhost:8080/api/v1/agent/chat \
+  -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"messages":[
+        {"role":"user","content":"main.go 읽어줘"},
+        {"role":"assistant","content":"","tool_calls":[{"id":"call_3h6...","name":"read_file","arguments":"{\"path\":\"main.go\"}"}]},
+        {"role":"tool","tool_call_id":"call_3h6...","content":"package main"}],
+       "tools":[...동일...],"max_tokens":2048}'
+```
+→ `content_delta` 로 답변이 스트리밍되고 `message_stop` 의 `stop_reason` 이 `end_turn` 이 된다.
+
+**추론이 실제로 걸리는지 확인하는 법**: 같은 질문을 `reasoning=high` 와 `none` 으로 각각 호출하면
+`completion_tokens` 가 눈에 띄게 달라진다(측정값: `high`=20, `none`=5 — 추론 토큰이 포함되기 때문).
 
 ### `GET /api/v1/agent/suggestions?workspace_root=`  (user)
 동작 힌트 카드(요구 G). 현재 stub:

@@ -47,11 +47,9 @@ func (a *GeminiAdapter) ProviderType() domainllmprovider.ProviderType {
 	return domainllmprovider.ProviderTypeExternal
 }
 
-// resolveGeminiModel 은 req.Model → a.model → 기본값 순으로 사용할 모델명을 고른다.
-func (a *GeminiAdapter) resolveGeminiModel(reqModel string) string {
-	if reqModel != "" {
-		return reqModel
-	}
+// resolveGeminiModel 은 사용할 모델명을 고른다.
+// 모델은 서버(관리자)의 Provider 설정으로만 정해지며 클라이언트 요청은 무시한다.
+func (a *GeminiAdapter) resolveGeminiModel(_ string) string {
 	if a.model != "" {
 		return a.model
 	}

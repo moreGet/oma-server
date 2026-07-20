@@ -73,6 +73,18 @@
           <input type="text" name="api_key_env" value="{{$p.APIKeyEnv}}" class="form-control form-control-sm" placeholder="API 키 환경변수명 (예: OPENAI_API_KEY)" pattern="[A-Za-z_][A-Za-z0-9_]*" title="환경변수 이름만 (값 아님)">
           <input type="password" name="api_key" class="form-control form-control-sm" autocomplete="off" placeholder="{{if $p.APIKeySet}}🔒 API 키 저장됨 — 변경 시에만 입력{{else}}API 키 직접 저장 (선택, 암호화){{end}}">
           <input type="number" name="max_tokens" value="{{$p.MaxTokens}}" class="form-control form-control-sm" placeholder="max_tokens">
+          <select name="reasoning" class="form-select form-select-sm" title="추론 강도(reasoning_effort). 클라이언트는 지정할 수 없고 이 값이 모든 요청에 적용됩니다.">
+            <option value="" {{if eq $p.Reasoning ""}}selected{{end}}>reasoning: 미지정 (모델 기본값)</option>
+            {{range $r := $.Data.Reasonings}}
+            <option value="{{$r}}" {{if eq $p.Reasoning $r}}selected{{end}}>reasoning: {{$r}}</option>
+            {{end}}
+          </select>
+          <select name="api_style" class="form-select form-select-sm" title="OpenAI 호출 방식. responses 는 추론과 도구를 동시에 지원합니다.">
+            <option value="" {{if eq $p.APIStyle ""}}selected{{end}}>api: chat_completions (기본)</option>
+            {{range $s := $.Data.APIStyles}}
+            <option value="{{$s}}" {{if eq $p.APIStyle $s}}selected{{end}}>api: {{$s}}</option>
+            {{end}}
+          </select>
           <button type="submit" class="btn btn-sm btn-primary">설정 저장</button>
         </form>
         <hr class="my-1">
@@ -130,6 +142,26 @@
             <div class="col-12 col-md-6">
               <label class="form-label small text-secondary">max_tokens</label>
               <input type="number" name="max_tokens" class="form-control" placeholder="선택">
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label small text-secondary">reasoning <span class="text-secondary">(추론 강도)</span></label>
+              <select name="reasoning" class="form-select">
+                <option value="">미지정 (모델 기본값)</option>
+                {{range $r := $.Data.Reasonings}}
+                <option value="{{$r}}">{{$r}}</option>
+                {{end}}
+              </select>
+              <div class="form-text">클라이언트는 지정할 수 없고, 이 값이 모든 요청에 적용됩니다.</div>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label small text-secondary">api_style <span class="text-secondary">(OpenAI 호출 방식)</span></label>
+              <select name="api_style" class="form-select">
+                <option value="">chat_completions (기본)</option>
+                {{range $s := $.Data.APIStyles}}
+                <option value="{{$s}}">{{$s}}</option>
+                {{end}}
+              </select>
+              <div class="form-text">추론과 도구를 <b>동시에</b> 쓰려면 <code>responses</code>. <code>chat_completions</code>만 지원하는 호환 서버(vLLM 등)는 기본값 유지.</div>
             </div>
             <div class="col-12">
               <div class="form-check">

@@ -102,6 +102,8 @@ type providerView struct {
 	APIKeyEnv string
 	APIKeySet bool // 직접 저장된(암호화) API 키 존재 여부(마스킹 표시용)
 	MaxTokens int
+	Reasoning string // 추론 강도(reasoning_effort). 빈 값 = 미지정
+	APIStyle  string // OpenAI 호출 방식(chat_completions | responses)
 	Active    bool
 }
 
@@ -130,6 +132,10 @@ type membersView struct {
 
 type providersView struct {
 	Providers []providerView
+	// Reasonings 는 선택 가능한 추론 강도 목록이다(도메인 허용 목록). 페이지 단위로 한 번만 싣는다.
+	Reasonings []string
+	// APIStyles 는 선택 가능한 OpenAI 호출 방식 목록이다.
+	APIStyles []string
 }
 
 // --- 공통 헬퍼 ---
@@ -420,7 +426,11 @@ func (s *Server) providersPage(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, basePath+"/")
 		return
 	}
-	pd.Data = providersView{Providers: toProviderViews(providers)}
+	pd.Data = providersView{
+		Providers:  toProviderViews(providers),
+		Reasonings: domainllmprovider.ReasoningEfforts,
+		APIStyles:  domainllmprovider.APIStyles,
+	}
 	s.render(w, "providers", pd)
 }
 
@@ -437,6 +447,8 @@ func (s *Server) providerCreate(w http.ResponseWriter, r *http.Request) {
 			APIKeyEnv: r.FormValue("api_key_env"),
 			APIKey:    r.FormValue("api_key"), // 평문 입력 → 유스케이스가 암호화 저장
 			MaxTokens: maxTokens,
+			Reasoning: r.FormValue("reasoning"),
+			APIStyle:  r.FormValue("api_style"),
 		},
 		ActorID: actorID(r),
 	})
@@ -455,6 +467,8 @@ func (s *Server) providerUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			APIKeyEnv: r.FormValue("api_key_env"),
 			APIKey:    r.FormValue("api_key"), // 평문 입력 → 유스케이스가 암호화 저장
 			MaxTokens: maxTokens,
+			Reasoning: r.FormValue("reasoning"),
+			APIStyle:  r.FormValue("api_style"),
 		},
 		ActorID: actorID(r),
 	})
@@ -1107,7 +1121,8 @@ func toProviderViews(ps []domainllmprovider.LLMProvider) []providerView {
 		out = append(out, providerView{
 			ID: p.ID, Name: p.Name, Type: string(p.ProviderType), Model: p.Config.Model,
 			Endpoint: p.Config.Endpoint, APIKeyEnv: p.Config.APIKeyEnv, APIKeySet: p.Config.APIKey != "",
-			MaxTokens: p.Config.MaxTokens, Active: p.IsActive,
+			MaxTokens: p.Config.MaxTokens, Reasoning: p.Config.Reasoning,
+			APIStyle: p.Config.APIStyle, Active: p.IsActive,
 		})
 	}
 	return out

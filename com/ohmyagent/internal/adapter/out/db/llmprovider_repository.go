@@ -29,8 +29,13 @@ func NewLLMProviderRepository(conn *sql.DB) *LLMProviderRepository {
 const providerColumns = "id, name, is_active, provider_type, config_json, created_at, updated_at, created_by, updated_by"
 
 // GetActive 는 is_active=true 인 Provider 한 건을 반환한다. 없으면 ErrNoActiveProvider.
+//
+// 활성 Provider 는 원래 하나여야 한다(Activate 가 트랜잭션으로 보장). 다만 불변식이 깨져
+// 여러 건이 활성인 상태에서 ORDER BY 가 없으면 DB 스캔 순서(대개 삽입 순)에 따라
+// "가장 오래된" 행이 조용히 선택된다 — 방금 활성화한 Provider 를 두고 옛 Provider 로
+// 요청이 나가는 형태로 드러난다. updated_at DESC 로 가장 최근에 활성화된 것을 고른다.
 func (r *LLMProviderRepository) GetActive(ctx context.Context) (domainllmprovider.LLMProvider, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+providerColumns+" FROM llm_providers WHERE is_active=? LIMIT 1", true)
+	row := r.db.QueryRowContext(ctx, "SELECT "+providerColumns+" FROM llm_providers WHERE is_active=? ORDER BY updated_at DESC LIMIT 1", true)
 	p, err := scanProvider(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domainllmprovider.LLMProvider{}, domainllmprovider.ErrNoActiveProvider

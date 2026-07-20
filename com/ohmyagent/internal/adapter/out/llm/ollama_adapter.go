@@ -37,11 +37,9 @@ func (a *OllamaAdapter) ProviderType() domainllmprovider.ProviderType {
 	return domainllmprovider.ProviderTypeLocal
 }
 
-// resolveModel 은 요청 모델 → 어댑터 기본 모델 → 패키지 기본 모델 순으로 모델명을 결정한다.
-func (a *OllamaAdapter) resolveModel(reqModel string) string {
-	if reqModel != "" {
-		return reqModel
-	}
+// resolveModel 은 모델명을 결정한다.
+// 모델은 서버(관리자)의 Provider 설정으로만 정해지며 클라이언트 요청은 무시한다.
+func (a *OllamaAdapter) resolveModel(_ string) string {
 	if a.model != "" {
 		return a.model
 	}

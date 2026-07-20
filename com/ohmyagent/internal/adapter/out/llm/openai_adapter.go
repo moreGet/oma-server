@@ -10,6 +10,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/shared"
 
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
@@ -25,11 +26,28 @@ const (
 // OpenAIAdapter 는 OpenAI Go SDK 로 Chat Completions API(스트리밍, function-calling)를 호출하는 어댑터다.
 // SSE 파싱·재시도·인증 헤더는 SDK 에 위임한다.
 type OpenAIAdapter struct {
-	endpoint   string // 빈 문자열이면 SDK 기본(api.openai.com) 사용
-	model      string
-	apiKey     string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
-	apiKeyEnv  string
-	httpClient *http.Client // 공유 커넥션 풀(factory 가 주입)
+	endpoint  string // 빈 문자열이면 SDK 기본(api.openai.com) 사용
+	model     string
+	apiKey    string // 직접 저장된 키(복호화된 평문). 비면 apiKeyEnv 환경변수 사용
+	apiKeyEnv string
+	// reasoning 은 Provider 설정의 추론 강도(reasoning_effort)다. 빈 값이면 파라미터를 보내지 않는다.
+	// 클라이언트 요청이 아니라 서버 설정에서만 온다.
+	reasoning string
+	// maxTokens 는 Provider 설정의 출력 토큰 상한이다(0 = 미지정).
+	// 요청이 값을 주지 않을 때의 서버측 기본값으로 쓰인다.
+	maxTokens int
+	// useResponses 가 true 면 /v1/responses, 아니면 /v1/chat/completions 를 호출한다.
+	useResponses bool
+	httpClient   *http.Client // 공유 커넥션 풀(factory 가 주입)
+}
+
+// resolveMaxTokens 는 출력 토큰 상한을 정한다(요청 지정값 우선, 없으면 Provider 설정값).
+// 0 을 반환하면 파라미터를 보내지 않는다(모델 기본값).
+func (a *OpenAIAdapter) resolveMaxTokens(reqMaxTokens int) int {
+	if reqMaxTokens > 0 {
+		return reqMaxTokens
+	}
+	return a.maxTokens
 }
 
 // NewOpenAIAdapter 는 도메인 ProviderConfig 로부터 OpenAIAdapter 를 생성한다.
@@ -40,7 +58,10 @@ func NewOpenAIAdapter(config domainllmprovider.ProviderConfig, httpClient *http.
 		model:      config.Model,
 		apiKey:     config.APIKey,
 		apiKeyEnv:  config.APIKeyEnv,
-		httpClient: httpClient,
+		reasoning:    config.Reasoning,
+		maxTokens:    config.MaxTokens,
+		useResponses: config.UsesResponsesAPI(),
+		httpClient:   httpClient,
 	}
 }
 
@@ -49,11 +70,11 @@ func (a *OpenAIAdapter) ProviderType() domainllmprovider.ProviderType {
 	return domainllmprovider.ProviderTypeExternal
 }
 
-// resolveModel 은 우선순위(req.Model → config.Model → 기본값)로 모델명을 정한다.
-func (a *OpenAIAdapter) resolveModel(reqModel string) string {
-	if reqModel != "" {
-		return reqModel
-	}
+// resolveModel 은 사용할 모델명을 정한다.
+//
+// 모델은 **서버(관리자)가 Provider 설정으로 정한다** — 클라이언트가 요청으로 바꿀 수 없다.
+// reqModel 을 받는 시그니처는 유지하되 무시한다(호출부 변경 없이 정책을 한 곳에서 강제).
+func (a *OpenAIAdapter) resolveModel(_ string) string {
 	if a.model != "" {
 		return a.model
 	}
@@ -187,17 +208,9 @@ func collectOpenAIToolCalls(m map[int64]*openAIToolCallAccumulator) []domainllmp
 	return out
 }
 
-// ChatStream 은 OpenAI Chat Completions 를 스트리밍으로 호출하고 응답 조각을 onChunk 로 전달한다.
-// 도구가 있으면 function-calling 으로 넘기고, 스트리밍으로 오는 tool_call 조각을 누적해
-// 마지막 Done 조각에 담는다. onChunk 가 에러를 반환하면 스트리밍을 중단하고 그 에러를 반환한다.
-func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
-	if apiKey == "" {
-		return fmt.Errorf("openai: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
-	}
-
-	client := a.newClient(apiKey)
-
+// buildParams 는 도메인 요청 + Provider 설정을 SDK 요청 파라미터로 조립한다.
+// 전송 바이트가 계약이므로 ChatStream 에서 분리해 직렬화 결과를 단위 테스트한다.
+func (a *OpenAIAdapter) buildParams(req domainllmprovider.ChatRequest) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:    a.resolveModel(req.Model),
 		Messages: buildOpenAIMessages(req.Messages),
@@ -212,14 +225,41 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 			OfAuto: openai.String("auto"),
 		}
 	}
-	if req.MaxTokens > 0 {
-		params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
+	if mt := a.resolveMaxTokens(req.MaxTokens); mt > 0 {
+		params.MaxCompletionTokens = openai.Int(int64(mt))
 	}
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
 	}
+	// 추론 강도는 Provider 설정에서만 온다(클라이언트가 지정할 수 없다).
+	// 빈 값이면 파라미터를 아예 보내지 않아 모델의 기본 동작을 그대로 둔다.
+	//
+	// 주의: /v1/chat/completions 에서는 function tools 와 reasoning_effort 를 함께 쓸 수 없는
+	// 모델이 있다(gpt-5.6-luna 등 → 400). 그런 모델로 도구를 쓰려면 reasoning 을 "none" 으로
+	// 두거나 /v1/responses 로 옮겨야 한다. 서버는 조합을 추측해 고치지 않고 그대로 보낸다.
+	if a.reasoning != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(a.reasoning)
+	}
+	return params
+}
 
-	stream := client.Chat.Completions.NewStreaming(ctx, params)
+// ChatStream 은 OpenAI Chat Completions 를 스트리밍으로 호출하고 응답 조각을 onChunk 로 전달한다.
+// 도구가 있으면 function-calling 으로 넘기고, 스트리밍으로 오는 tool_call 조각을 누적해
+// 마지막 Done 조각에 담는다. onChunk 가 에러를 반환하면 스트리밍을 중단하고 그 에러를 반환한다.
+func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
+	// /v1/responses 는 추론과 도구를 동시에 지원한다(chat/completions 는 모델에 따라 400).
+	if a.useResponses {
+		return a.chatStreamResponses(ctx, req, onChunk)
+	}
+
+	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
+	if apiKey == "" {
+		return fmt.Errorf("openai: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
+	}
+
+	client := a.newClient(apiKey)
+
+	stream := client.Chat.Completions.NewStreaming(ctx, a.buildParams(req))
 	defer func() { _ = stream.Close() }()
 
 	var (

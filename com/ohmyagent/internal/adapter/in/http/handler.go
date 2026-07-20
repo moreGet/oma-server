@@ -127,9 +127,26 @@ func HandleAgent(h HandlerFunc) http.HandlerFunc {
 type AppError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// cause 는 원인 에러다. json 태그가 없으므로 응답 본문에는 절대 직렬화되지 않고,
+	// Error() 를 통해 서버 로그에만 남는다. 업스트림 실패(502 등)를 조사하려면
+	// 클라이언트에 노출할 수 없는 상세(벤더 응답·엔드포인트)가 로그에 필요하다.
+	cause error
 }
 
-func (e *AppError) Error() string { return e.Code + ": " + e.Message }
+// WithCause 는 원인 에러를 매단 사본을 반환한다(로그 전용, 클라이언트 응답에는 노출되지 않는다).
+func (e *AppError) WithCause(err error) *AppError {
+	if e == nil || err == nil {
+		return e
+	}
+	return &AppError{Code: e.Code, Message: e.Message, cause: err}
+}
+
+func (e *AppError) Error() string {
+	if e.cause != nil {
+		return e.Code + ": " + e.Message + ": " + e.cause.Error()
+	}
+	return e.Code + ": " + e.Message
+}
 
 // HTTPStatus 는 code 에 대응하는 HTTP 상태코드를 반환한다.
 func (e *AppError) HTTPStatus() int {

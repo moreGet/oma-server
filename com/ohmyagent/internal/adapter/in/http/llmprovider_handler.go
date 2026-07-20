@@ -140,8 +140,12 @@ type providerConfigDTO struct {
 	// APIKey 는 입력 전용(평문). 서버가 암호화해 저장하며 응답에는 절대 포함하지 않는다.
 	APIKey string `json:"api_key,omitempty"`
 	// APIKeySet 은 출력 전용: 직접 저장된(암호화된) API 키 존재 여부(마스킹).
-	APIKeySet   bool           `json:"api_key_set"`
-	MaxTokens   int            `json:"max_tokens,omitempty"`
+	APIKeySet bool `json:"api_key_set"`
+	MaxTokens int  `json:"max_tokens,omitempty"`
+	// Reasoning 은 추론 강도(reasoning_effort). 서버(관리자)가 정하며 채팅 요청에서는 지정할 수 없다.
+	Reasoning string `json:"reasoning,omitempty"`
+	// APIStyle 은 OpenAI 호출 방식(chat_completions 기본 | responses).
+	APIStyle    string         `json:"api_style,omitempty"`
 	ExtraParams map[string]any `json:"extra_params,omitempty"`
 }
 
@@ -185,6 +189,8 @@ func toProviderResp(p domainllmprovider.LLMProvider) providerResp {
 			// 직접 저장된 키는 마스킹: 존재 여부만 노출하고 값(암호문/평문)은 절대 반환하지 않는다.
 			APIKeySet:   p.Config.APIKey != "",
 			MaxTokens:   p.Config.MaxTokens,
+			Reasoning:   p.Config.Reasoning,
+			APIStyle:    p.Config.APIStyle,
 			ExtraParams: p.Config.ExtraParams,
 		},
 		CreatedAt: p.CreatedAt,
@@ -201,6 +207,8 @@ func fromConfigDTO(c providerConfigDTO) domainllmprovider.ProviderConfig {
 		APIKeyEnv:   c.APIKeyEnv,
 		APIKey:      c.APIKey, // 평문 입력 → 유스케이스가 암호화
 		MaxTokens:   c.MaxTokens,
+		Reasoning:   c.Reasoning,
+		APIStyle:    c.APIStyle,
 		ExtraParams: c.ExtraParams,
 	}
 }
@@ -218,9 +226,10 @@ func providerErrToHTTP(err error) error {
 	case errors.Is(err, domainllmprovider.ErrConflict):
 		return ErrConflict("provider already exists")
 	case errors.Is(err, domainllmprovider.ErrChatUnsupported):
-		return ErrBadGateway("provider does not support chat")
+		return ErrBadGateway("provider does not support chat").WithCause(err)
 	case errors.Is(err, domainllmprovider.ErrUpstream):
-		return ErrBadGateway("provider connection failed")
+		// 연결 테스트 실패 원인(엔드포인트·벤더 응답)은 서버 로그에만 남긴다.
+		return ErrBadGateway("provider connection failed").WithCause(err)
 	// accessGate(authUC) 가 반환하는 인가 에러가 새는 경우 매핑.
 	case errors.Is(err, domainauth.ErrPermission):
 		return ErrForbidden("permission denied")

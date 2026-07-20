@@ -219,6 +219,44 @@ func TestProviderService_Create(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, cache.invalidateCall)
 	})
+
+	// 회귀: is_active=true 로 그대로 INSERT 하면 기존 활성 Provider 가 살아남아 활성이 둘이 된다.
+	// GetActive 는 활성이 하나임을 가정하므로, 그 상태에서는 어느 쪽이 뽑힐지가 DB 스캔 순서에
+	// 좌우된다(실제로 옛 Provider 로 요청이 나가 502 로 드러났다).
+	// 따라서 비활성으로 INSERT 한 뒤 Activate 트랜잭션으로 배타 활성화해야 한다.
+	t.Run("active create goes through Activate so only one provider stays active", func(t *testing.T) {
+		repo := newFakeRepo()
+		cache := &fakeCache{}
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
+
+		p, err := svc.Create(ctx, domainllmprovider.CreateCommand{
+			Name: "openai", ProviderType: domainllmprovider.ProviderTypeExternal, IsActive: true, ActorID: "admin1",
+		})
+		require.NoError(t, err)
+
+		// INSERT 자체는 비활성이어야 한다(활성 전환은 Activate 트랜잭션의 책임).
+		require.Len(t, repo.saved, 1)
+		assert.False(t, repo.saved[0].IsActive, "INSERT 는 비활성이어야 배타 활성화가 보장된다")
+
+		// 배타 활성화 트랜잭션을 정확히 1회 태워야 한다.
+		assert.Equal(t, 1, repo.activateCall)
+
+		// 호출자에게는 활성으로 보여야 한다.
+		assert.True(t, p.IsActive)
+	})
+
+	t.Run("activate failure surfaces and leaves cache untouched", func(t *testing.T) {
+		repo := newFakeRepo()
+		repo.activateErr = errors.New("activate boom")
+		cache := &fakeCache{}
+		svc := NewProviderService(repo, cache, &fakeFactory{}, &noopCipher{}, &fakeGate{})
+
+		_, err := svc.Create(ctx, domainllmprovider.CreateCommand{
+			Name: "openai", ProviderType: domainllmprovider.ProviderTypeExternal, IsActive: true, ActorID: "admin1",
+		})
+		require.Error(t, err)
+		assert.Equal(t, 0, cache.invalidateCall)
+	})
 }
 
 // ---------------------------------------------------------------------------

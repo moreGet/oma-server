@@ -344,9 +344,10 @@ func mapProviderQuotaAuthErr(err error) error {
 	case errors.Is(err, domainllmprovider.ErrNoActiveProvider):
 		return ErrNotFound("no active llm provider")
 	case errors.Is(err, domainllmprovider.ErrChatUnsupported):
-		return ErrBadGateway("active provider does not support chat")
+		return ErrBadGateway("active provider does not support chat").WithCause(err)
 	case errors.Is(err, domainllmprovider.ErrUpstream):
-		return ErrBadGateway("llm provider request failed")
+		// 클라이언트 메시지는 일반화하되, 원인(벤더 응답)은 서버 로그에 남긴다.
+		return ErrBadGateway("llm provider request failed").WithCause(err)
 	case errors.Is(err, domainauth.ErrPermission):
 		return ErrForbidden("permission denied")
 	default:

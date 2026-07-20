@@ -95,9 +95,10 @@ func (s *ProviderService) Create(ctx context.Context, cmd domainllmprovider.Crea
 	cmd.Config.APIKey = enc
 	now := s.now()
 	p := domainllmprovider.LLMProvider{
-		ID:           uuid.NewString(),
-		Name:         cmd.Name,
-		IsActive:     cmd.IsActive,
+		ID:   uuid.NewString(),
+		Name: cmd.Name,
+		// 항상 비활성으로 INSERT 한다. 활성 요청이면 아래에서 Activate 로 전환한다.
+		IsActive:     false,
 		ProviderType: cmd.ProviderType,
 		Config:       cmd.Config,
 		CreatedAt:    now,
@@ -108,8 +109,15 @@ func (s *ProviderService) Create(ctx context.Context, cmd domainllmprovider.Crea
 	if err := s.repo.Save(ctx, p); err != nil {
 		return domainllmprovider.LLMProvider{}, err
 	}
-	// 활성 상태로 생성되었다면 캐시 무효화(다음 조회에서 lazy-load).
-	if p.IsActive {
+	// is_active=true 로 그냥 INSERT 하면 기존 활성 Provider 가 살아남아 활성이 둘이 된다.
+	// GetActive 는 활성이 하나임을 가정하므로, 그 상태에서는 어느 쪽이 선택될지가 사실상
+	// DB 스캔 순서에 좌우된다(옛 Provider 로 요청이 나가 502 로 드러남).
+	// Activate 트랜잭션("전체 비활성 → 이 건만 활성")을 태워 불변식을 유지한다.
+	if cmd.IsActive {
+		if err := s.repo.Activate(ctx, p.ID, now.Unix(), cmd.ActorID); err != nil {
+			return domainllmprovider.LLMProvider{}, err
+		}
+		p.IsActive = true
 		s.cache.Invalidate()
 	}
 	slog.Info("provider created", "event", "provider.created",
