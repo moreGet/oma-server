@@ -111,7 +111,7 @@ func (r *LLMProviderRepository) UpdateConfig(ctx context.Context, id string, cfg
 	if err != nil {
 		return fmt.Errorf("update provider config id=%s: %w", id, err)
 	}
-	return checkProviderAffected(res)
+	return affectedOrNotFound(res, domainllmprovider.ErrNotFound)
 }
 
 // Activate 는 단일 트랜잭션으로 모두 비활성화한 뒤 지정 id 만 활성화한다.
@@ -138,7 +138,7 @@ func (r *LLMProviderRepository) Activate(ctx context.Context, id string, now int
 	if err != nil {
 		return fmt.Errorf("activate provider id=%s: %w", id, err)
 	}
-	if err := checkProviderAffected(res); err != nil {
+	if err := affectedOrNotFound(res, domainllmprovider.ErrNotFound); err != nil {
 		return err
 	}
 
@@ -154,7 +154,7 @@ func (r *LLMProviderRepository) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete provider id=%s: %w", id, err)
 	}
-	return checkProviderAffected(res)
+	return affectedOrNotFound(res, domainllmprovider.ErrNotFound)
 }
 
 // scanProvider 는 한 행을 domainllmprovider.LLMProvider 로 스캔한다.
@@ -207,16 +207,4 @@ func unmarshalConfig(raw string) (domainllmprovider.ProviderConfig, error) {
 		return cfg, err
 	}
 	return cfg, nil
-}
-
-// checkProviderAffected 는 0행 영향을 ErrNotFound 로 변환한다(도메인별 별개 구현).
-func checkProviderAffected(res sql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return domainllmprovider.ErrNotFound
-	}
-	return nil
 }

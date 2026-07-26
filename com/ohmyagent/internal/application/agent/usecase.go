@@ -168,7 +168,10 @@ func contentWithAttachments(m domainagent.Message) string {
 	for _, a := range m.Attachments {
 		if domainagent.IsTextLikeAttachment(a.ContentType) {
 			if data, err := base64.StdEncoding.DecodeString(a.DataBase64); err == nil {
-				fmt.Fprintf(&b, "\n\n[attached file: %s (%s)]\n```\n%s\n```", a.FileName, a.ContentType, string(data))
+				b.Grow(len(data) + len(a.FileName) + len(a.ContentType) + 32)
+				fmt.Fprintf(&b, "\n\n[attached file: %s (%s)]\n```\n", a.FileName, a.ContentType)
+				b.Write(data)
+				b.WriteString("\n```")
 				continue
 			}
 		}

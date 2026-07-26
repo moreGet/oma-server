@@ -154,9 +154,9 @@ func collectResponsesToolCalls(m map[string]*responsesToolCallBuilder) []domainl
 // chatStreamResponses 는 /v1/responses 를 스트리밍 호출하고 응답 조각을 onChunk 로 전달한다.
 // ChatStream 과 동일한 계약을 지킨다(마지막에 Done=true 조각 정확히 1회).
 func (a *OpenAIAdapter) chatStreamResponses(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
-	if apiKey == "" {
-		return fmt.Errorf("openai: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
+	apiKey, err := requireAPIKey("openai", a.apiKey, a.apiKeyEnv)
+	if err != nil {
+		return err
 	}
 
 	client := a.newClient(apiKey)

@@ -252,9 +252,9 @@ func (a *OpenAIAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 		return a.chatStreamResponses(ctx, req, onChunk)
 	}
 
-	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
-	if apiKey == "" {
-		return fmt.Errorf("openai: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
+	apiKey, err := requireAPIKey("openai", a.apiKey, a.apiKeyEnv)
+	if err != nil {
+		return err
 	}
 
 	client := a.newClient(apiKey)

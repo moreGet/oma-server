@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
+	domainagentregistry "aiagent/com/ohmyagent/internal/domain/agentregistry"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainclientversion "aiagent/com/ohmyagent/internal/domain/clientversion"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -63,6 +64,12 @@ type clientVersionManager interface {
 	UpdateSettings(ctx context.Context, cmd domainclientversion.UpdateCommand) error
 }
 
+// agentRegistryManager 는 어드민 에이전트 레지스트리 화면이 사용하는 소비자 인터페이스다(*agentregistryapp.Service 가 충족).
+type agentRegistryManager interface {
+	AdminList(ctx context.Context, actorID string) ([]domainagentregistry.Agent, error)
+	AdminDelete(ctx context.Context, actorID, id string) error
+}
+
 // chatManager 는 어드민 채팅 관리/모더레이션이 사용하는 소비자 인터페이스다(*messagingapp.Service 가 충족).
 type chatManager interface {
 	AdminStats(ctx context.Context) (domainmessaging.AdminStats, error)
@@ -93,6 +100,7 @@ type Server struct {
 	toolPolicy    toolPolicyManager
 	clientVersion clientVersionManager
 	chat          chatManager
+	agents        agentRegistryManager
 	tokens        domainauth.TokenService
 	cookieTTL     time.Duration
 	secure        bool // 운영(prod)에서 Secure 쿠키 플래그
@@ -101,7 +109,7 @@ type Server struct {
 }
 
 // NewServer 는 어드민 웹 서버를 생성하고 템플릿을 파싱한다.
-func NewServer(auth domainauth.Service, providers domainllmprovider.Service, transcripts transcriptManager, quota quotaManager, sessions sessionManager, toolPolicy toolPolicyManager, clientVersion clientVersionManager, chat chatManager, tokens domainauth.TokenService, cookieTTL time.Duration, secure bool) *Server {
+func NewServer(auth domainauth.Service, providers domainllmprovider.Service, transcripts transcriptManager, quota quotaManager, sessions sessionManager, toolPolicy toolPolicyManager, clientVersion clientVersionManager, chat chatManager, agents agentRegistryManager, tokens domainauth.TokenService, cookieTTL time.Duration, secure bool) *Server {
 	return &Server{
 		auth:          auth,
 		providers:     providers,
@@ -111,6 +119,7 @@ func NewServer(auth domainauth.Service, providers domainllmprovider.Service, tra
 		toolPolicy:    toolPolicy,
 		clientVersion: clientVersion,
 		chat:          chat,
+		agents:        agents,
 		tokens:        tokens,
 		cookieTTL:     cookieTTL,
 		secure:        secure,
@@ -155,7 +164,7 @@ func commaInt(n int) string {
 
 // parsePages 는 layout + 각 페이지를 합쳐 페이지별 템플릿 세트를 만든다(공용 함수 주입).
 func parsePages() map[string]*template.Template {
-	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions", "tools", "client", "chat", "chat_room"}
+	names := []string{"dashboard", "members", "providers", "account", "transcripts", "sessions", "tools", "client", "chat", "chat_room", "agents"}
 	out := make(map[string]*template.Template, len(names))
 	for _, n := range names {
 		out[n] = template.Must(template.New("layout.html").Funcs(templateFuncs).ParseFS(templatesFS, "templates/layout.html", "templates/partials.html", "templates/"+n+".html"))
@@ -208,6 +217,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET "+basePath+"/client", s.authed(s.clientPage))
 	mux.HandleFunc("POST "+basePath+"/client", s.authed(s.clientUpdate))
+
+	mux.HandleFunc("GET "+basePath+"/agents", s.authed(s.agentsPage))
+	mux.HandleFunc("POST "+basePath+"/agents/{id}/delete", s.authed(s.agentDelete))
 
 	mux.HandleFunc("GET "+basePath+"/chat", s.authed(s.chatPage))
 	mux.HandleFunc("GET "+basePath+"/chat/rooms/{id}", s.authed(s.chatRoomPage))

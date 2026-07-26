@@ -56,7 +56,7 @@ func (r *MemberRepository) UpdateProfile(ctx context.Context, id, email, display
 	if err != nil {
 		return fmt.Errorf("update profile id=%s: %w", id, err)
 	}
-	return checkMemberAffected(res)
+	return affectedOrNotFound(res, domainauth.ErrNotFound)
 }
 
 // Update 는 role/active/audit 필드를 갱신한다. 0행 → domainauth.ErrNotFound.
@@ -68,7 +68,7 @@ func (r *MemberRepository) Update(ctx context.Context, m domainauth.Member) erro
 	if err != nil {
 		return fmt.Errorf("update member id=%s: %w", m.ID, err)
 	}
-	return checkMemberAffected(res)
+	return affectedOrNotFound(res, domainauth.ErrNotFound)
 }
 
 // FindByID 는 단건 조회. 없으면 domainauth.ErrNotFound.
@@ -151,7 +151,7 @@ func (r *MemberRepository) UpdatePassword(ctx context.Context, id, passwordHash 
 	if err != nil {
 		return fmt.Errorf("update member password id=%s: %w", id, err)
 	}
-	return checkMemberAffected(res)
+	return affectedOrNotFound(res, domainauth.ErrNotFound)
 }
 
 // Delete 는 ID 기준 삭제. 0행 → domainauth.ErrNotFound.
@@ -160,7 +160,7 @@ func (r *MemberRepository) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete member id=%s: %w", id, err)
 	}
-	return checkMemberAffected(res)
+	return affectedOrNotFound(res, domainauth.ErrNotFound)
 }
 
 // scanMember 는 한 행(members JOIN roles)을 domainauth.Member 로 스캔한다.
@@ -194,16 +194,4 @@ func scanMember(s rowScanner) (domainauth.Member, error) {
 	m.DisplayName = strFromNull(displayName)
 	m.Organization = strFromNull(organization)
 	return m, nil
-}
-
-// checkMemberAffected 는 0행 영향을 domainauth.ErrNotFound 로 변환한다(도메인별 별개 구현).
-func checkMemberAffected(res sql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return domainauth.ErrNotFound
-	}
-	return nil
 }

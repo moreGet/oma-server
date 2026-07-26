@@ -85,8 +85,5 @@ func (r *ConversationRepository) DeleteConversation(ctx context.Context, ownerID
 	if err != nil {
 		return fmt.Errorf("conversation: delete: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return domainproject.ErrNotFound
-	}
-	return nil
+	return affectedOrNotFound(res, domainproject.ErrNotFound)
 }

@@ -41,6 +41,15 @@ func resolveAPIKey(apiKey, apiKeyEnv string) string {
 	return ""
 }
 
+// requireAPIKey 는 resolveAPIKey 에 "빈 키 → ErrUpstream" 변환까지 얹는다(어댑터 공통 프리앰블).
+func requireAPIKey(provider, apiKey, apiKeyEnv string) (string, error) {
+	key := resolveAPIKey(apiKey, apiKeyEnv)
+	if key == "" {
+		return "", fmt.Errorf("%s: %w: API key not set (set config api_key or api_key_env)", provider, domainllmprovider.ErrUpstream)
+	}
+	return key, nil
+}
+
 // EXTERNAL Provider 를 모델명 접두사로 어댑터에 분기한다(claude*→Claude, gemini*→Gemini, 그 외→OpenAI).
 const (
 	claudeModelPrefix = "claude"

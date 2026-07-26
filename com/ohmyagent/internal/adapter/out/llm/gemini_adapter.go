@@ -59,9 +59,9 @@ func (a *GeminiAdapter) resolveGeminiModel(_ string) string {
 // ChatStream 은 GenerateContentStream 을 호출해 텍스트 델타는 즉시 onChunk 로 흘리고, FunctionCall 은 누적해 마지막 Done 조각에 담는다.
 // onChunk 가 에러를 반환하면 즉시 중단하고 그 에러를 그대로 반환한다.
 func (a *GeminiAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
-	if apiKey == "" {
-		return fmt.Errorf("gemini: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
+	apiKey, err := requireAPIKey("gemini", a.apiKey, a.apiKeyEnv)
+	if err != nil {
+		return err
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{

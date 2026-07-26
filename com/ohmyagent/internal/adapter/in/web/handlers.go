@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
+	domainagentregistry "aiagent/com/ohmyagent/internal/domain/agentregistry"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainclientversion "aiagent/com/ohmyagent/internal/domain/clientversion"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -210,6 +211,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if pd.CanManageMembers {
 		dv.ShowMembers = true
 		// 멤버를 한 번만 조회하고 역할별 카운트는 메모리에서 집계한다(역할별 추가 쿼리 3회 제거).
+		// 멤버 행 전량 로드는 의도된 트레이드오프: 멤버 수는 관리자 통제로 유한하고,
+		// 역할별 COUNT 3쿼리로 되돌리면 저빈도 페이지에 왕복만 늘어난다.
 		if members, total, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{}); err == nil {
 			dv.MemberTotal = total
 			counts := make(map[int]int, 3)
@@ -314,8 +317,7 @@ func (s *Server) membersCreate(w http.ResponseWriter, r *http.Request) {
 		DisplayName:  r.FormValue("display_name"),
 		Organization: r.FormValue("organization"),
 	})
-	s.flashResult(w, err, "멤버를 생성했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "멤버를 생성했습니다.", "/members")
 }
 
 func (s *Server) memberChangeRole(w http.ResponseWriter, r *http.Request) {
@@ -326,8 +328,7 @@ func (s *Server) memberChangeRole(w http.ResponseWriter, r *http.Request) {
 		TargetID: r.PathValue("id"),
 		RoleID:   roleID,
 	})
-	s.flashResult(w, err, "역할을 변경했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "역할을 변경했습니다.", "/members")
 }
 
 func (s *Server) memberToggleActive(w http.ResponseWriter, r *http.Request) {
@@ -338,8 +339,7 @@ func (s *Server) memberToggleActive(w http.ResponseWriter, r *http.Request) {
 		TargetID: r.PathValue("id"),
 		Active:   active,
 	})
-	s.flashResult(w, err, "활성 상태를 변경했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "활성 상태를 변경했습니다.", "/members")
 }
 
 func (s *Server) memberUpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -351,35 +351,30 @@ func (s *Server) memberUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		DisplayName:  r.FormValue("display_name"),
 		Organization: r.FormValue("organization"),
 	})
-	s.flashResult(w, err, "프로필을 변경했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "프로필을 변경했습니다.", "/members")
 }
 
 func (s *Server) memberResetPassword(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	err := s.auth.ResetPassword(r.Context(), actorID(r), r.PathValue("id"), r.FormValue("new_password"))
-	s.flashResult(w, err, "비밀번호를 초기화했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "비밀번호를 초기화했습니다.", "/members")
 }
 
 func (s *Server) memberDelete(w http.ResponseWriter, r *http.Request) {
 	err := s.auth.DeleteMember(r.Context(), actorID(r), r.PathValue("id"))
-	s.flashResult(w, err, "멤버를 삭제했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "멤버를 삭제했습니다.", "/members")
 }
 
 func (s *Server) memberSetTokenLimit(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	err := s.quota.SetMemberLimits(r.Context(), actorID(r), r.PathValue("id"), formLimits(r))
-	s.flashResult(w, err, "토큰 한도를 변경했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "토큰 한도를 변경했습니다.", "/members")
 }
 
 func (s *Server) quotaSetDefault(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	err := s.quota.SetDefaultLimits(r.Context(), actorID(r), formLimits(r))
-	s.flashResult(w, err, "전역 기본 토큰 한도를 변경했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "전역 기본 토큰 한도를 변경했습니다.", "/members")
 }
 
 // quotaWin 은 표시용 사용률 뷰를 만든다(유효 한도 = 오버라이드>0 ? 오버라이드 : 전역 기본).
@@ -401,8 +396,7 @@ func quotaWin(label string, override, def, used int) memberQuotaView {
 
 func (s *Server) memberResetQuota(w http.ResponseWriter, r *http.Request) {
 	err := s.quota.ResetUsage(r.Context(), actorID(r), r.PathValue("id"))
-	s.flashResult(w, err, "사용량을 초기화했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "사용량을 초기화했습니다.", "/members")
 }
 
 // formLimits 는 폼에서 일/주/월 한도를 읽는다(빈/비정상 값은 0).
@@ -452,8 +446,7 @@ func (s *Server) providerCreate(w http.ResponseWriter, r *http.Request) {
 		},
 		ActorID: actorID(r),
 	})
-	s.flashResult(w, err, "Provider를 등록했습니다.")
-	s.redirect(w, r, basePath+"/providers")
+	s.flashRedirect(w, r, err, "Provider를 등록했습니다.", "/providers")
 }
 
 func (s *Server) providerUpdateConfig(w http.ResponseWriter, r *http.Request) {
@@ -472,14 +465,12 @@ func (s *Server) providerUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		},
 		ActorID: actorID(r),
 	})
-	s.flashResult(w, err, "Provider 설정을 저장했습니다.")
-	s.redirect(w, r, basePath+"/providers")
+	s.flashRedirect(w, r, err, "Provider 설정을 저장했습니다.", "/providers")
 }
 
 func (s *Server) providerActivate(w http.ResponseWriter, r *http.Request) {
 	err := s.providers.Activate(r.Context(), domainllmprovider.ActivateCommand{ID: r.PathValue("id"), ActorID: actorID(r)})
-	s.flashResult(w, err, "활성 Provider를 변경했습니다.")
-	s.redirect(w, r, basePath+"/providers")
+	s.flashRedirect(w, r, err, "활성 Provider를 변경했습니다.", "/providers")
 }
 
 func (s *Server) providerTest(w http.ResponseWriter, r *http.Request) {
@@ -499,8 +490,7 @@ func (s *Server) providerTest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) providerDelete(w http.ResponseWriter, r *http.Request) {
 	err := s.providers.Delete(r.Context(), domainllmprovider.DeleteCommand{ID: r.PathValue("id"), ActorID: actorID(r)})
-	s.flashResult(w, err, "Provider를 삭제했습니다.")
-	s.redirect(w, r, basePath+"/providers")
+	s.flashRedirect(w, r, err, "Provider를 삭제했습니다.", "/providers")
 }
 
 // --- 내 계정 ---
@@ -572,8 +562,7 @@ func (s *Server) transcriptsUpdate(w http.ResponseWriter, r *http.Request) {
 			StripAttachments: r.FormValue("strip_attachments") == "on",
 		},
 	})
-	s.flashResult(w, err, "대화 이력 설정을 저장했습니다.")
-	s.redirect(w, r, basePath+"/transcripts")
+	s.flashRedirect(w, r, err, "대화 이력 설정을 저장했습니다.", "/transcripts")
 }
 
 func (s *Server) transcriptsTest(w http.ResponseWriter, r *http.Request) {
@@ -633,8 +622,7 @@ func (s *Server) sessionsUpdate(w http.ResponseWriter, r *http.Request) {
 			DefaultMaxSessions: maxSessions,
 		},
 	})
-	s.flashResult(w, err, "세션 저장 설정을 저장했습니다.")
-	s.redirect(w, r, basePath+"/sessions")
+	s.flashRedirect(w, r, err, "세션 저장 설정을 저장했습니다.", "/sessions")
 }
 
 func (s *Server) sessionsTest(w http.ResponseWriter, r *http.Request) {
@@ -685,8 +673,75 @@ func (s *Server) clientUpdate(w http.ResponseWriter, r *http.Request) {
 			Mandatory:        r.FormValue("mandatory") == "on",
 		},
 	})
-	s.flashResult(w, err, "클라이언트 버전 설정을 저장했습니다.")
-	s.redirect(w, r, basePath+"/client")
+	s.flashRedirect(w, r, err, "클라이언트 버전 설정을 저장했습니다.", "/client")
+}
+
+// --- 에이전트 레지스트리(/admin/agents) ---
+
+// agentRow 는 어드민 에이전트 목록 한 행의 표시 데이터다.
+type agentRow struct {
+	ID            string
+	Name          string
+	Status        string // online | stale | offline (뱃지 색 분기)
+	Endpoint      string
+	Capabilities  string // 콤마 연결 표시
+	Tags          string
+	Model         string
+	Version       string
+	LastHeartbeat string // KST 표시("" = heartbeat 기록 없음)
+	Owner         string // username(해석 실패 시 member id 폴백)
+}
+
+type agentsView struct {
+	Agents  []agentRow
+	Online  int
+	Stale   int
+	Offline int
+}
+
+func (s *Server) agentsPage(w http.ResponseWriter, r *http.Request) {
+	pd := s.base(r, w, "에이전트", "agents")
+	list, err := s.agents.AdminList(r.Context(), actorID(r))
+	if err != nil {
+		s.setFlashError(w, webErrorMessage(err))
+		s.redirect(w, r, basePath+"/")
+		return
+	}
+	v := agentsView{Agents: make([]agentRow, 0, len(list))}
+	for _, a := range list {
+		owner := a.OwnerName
+		if owner == "" {
+			owner = a.OwnerID // 삭제된 멤버 등 이름 해석 실패 시 id 폴백
+		}
+		switch a.Status {
+		case domainagentregistry.StatusOnline:
+			v.Online++
+		case domainagentregistry.StatusStale:
+			v.Stale++
+		default:
+			v.Offline++
+		}
+		v.Agents = append(v.Agents, agentRow{
+			ID:            a.ID,
+			Name:          a.Name,
+			Status:        string(a.Status),
+			Endpoint:      a.EndpointURL,
+			Capabilities:  strings.Join(a.Capabilities, ", "),
+			Tags:          strings.Join(a.Tags, ", "),
+			Model:         a.Model,
+			Version:       a.Version,
+			LastHeartbeat: fmtUnixKST(a.LastHeartbeatAt.Unix()),
+			Owner:         owner,
+		})
+	}
+	pd.Data = v
+	s.render(w, "agents", pd)
+}
+
+// agentDelete 는 어드민 강제 해제다(소유자 무관 삭제 — 좀비/고아 레코드 정리).
+func (s *Server) agentDelete(w http.ResponseWriter, r *http.Request) {
+	err := s.agents.AdminDelete(r.Context(), actorID(r), r.PathValue("id"))
+	s.flashRedirect(w, r, err, "에이전트 등록을 해제했습니다.", "/agents")
 }
 
 // --- 채팅 관리(/admin/chat) ---
@@ -796,8 +851,7 @@ func (s *Server) chatRoomDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.chat.AdminDeleteRoom(r.Context(), r.PathValue("id"))
-	s.flashResult(w, err, "방을 삭제했습니다.")
-	s.redirect(w, r, basePath+"/chat")
+	s.flashRedirect(w, r, err, "방을 삭제했습니다.", "/chat")
 }
 
 func (s *Server) chatMessageDelete(w http.ResponseWriter, r *http.Request) {
@@ -971,8 +1025,7 @@ func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
 			BlockedPaths:    paths,
 		},
 	})
-	s.flashResult(w, err, "도구 정책을 저장했습니다.")
-	s.redirect(w, r, basePath+"/tools")
+	s.flashRedirect(w, r, err, "도구 정책을 저장했습니다.", "/tools")
 }
 
 // splitLines 는 줄바꿈 구분 텍스트를 trim·빈 줄 제거한 슬라이스로 만든다.
@@ -1041,8 +1094,7 @@ func (s *Server) memberSetSessionLimit(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	maxSessions, _ := strconv.Atoi(r.FormValue("max_sessions"))
 	err := s.sessions.SetMemberLimit(r.Context(), actorID(r), r.PathValue("id"), maxSessions)
-	s.flashResult(w, err, "최대 세션 수를 변경했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "최대 세션 수를 변경했습니다.", "/members")
 }
 
 // memberSetToolPolicy 는 멤버별 도구 정책 오버라이드(허용/차단)를 저장한다(빈 입력=오버라이드 해제).
@@ -1055,8 +1107,13 @@ func (s *Server) memberSetToolPolicy(w http.ResponseWriter, r *http.Request) {
 		Disabled: disabled,
 		ActorID:  actorID(r),
 	})
-	s.flashResult(w, err, "멤버 도구 정책을 저장했습니다.")
-	s.redirect(w, r, basePath+"/members")
+	s.flashRedirect(w, r, err, "멤버 도구 정책을 저장했습니다.", "/members")
+}
+
+// flashRedirect 는 어드민 폼 POST 의 공통 마무리다: 결과 플래시 후 목록 페이지로 리다이렉트.
+func (s *Server) flashRedirect(w http.ResponseWriter, r *http.Request, err error, okMsg, path string) {
+	s.flashResult(w, err, okMsg)
+	s.redirect(w, r, basePath+path)
 }
 
 // flashResult 는 use case 결과를 플래시 메시지로 변환한다(실패 시 친화 메시지로 매핑, 시크릿 누출 방지).
@@ -1086,7 +1143,7 @@ func webErrorMessage(err error) string {
 		return "현재 비밀번호가 올바르지 않습니다."
 	case errors.Is(err, domainauth.ErrConflict), errors.Is(err, domainllmprovider.ErrConflict):
 		return "이미 존재하는 항목입니다."
-	case errors.Is(err, domainauth.ErrNotFound), errors.Is(err, domainllmprovider.ErrNotFound):
+	case errors.Is(err, domainauth.ErrNotFound), errors.Is(err, domainllmprovider.ErrNotFound), errors.Is(err, domainagentregistry.ErrNotFound):
 		return "대상을 찾을 수 없습니다."
 	default:
 		return "처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."

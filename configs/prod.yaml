@@ -16,3 +16,9 @@ auth:
   jwt_expiry: "24h"
   seed_admin_username: ""      # 운영은 시딩 금지
   seed_admin_password: ""
+# 에이전트 레지스트리(등록·발견·생존성·A2A 토큰 브로커).
+registry:
+  heartbeat_interval: "15s"
+  lease_ttl: "45s"          # 권장 3×heartbeat_interval
+  token_ttl: "120s"         # A2A 브로커 토큰 수명
+  sweep_interval: "5m"      # offline 로 오래(24h+) 방치된 레코드 정리 주기. "0s" = 비활성

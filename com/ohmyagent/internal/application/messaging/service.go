@@ -125,10 +125,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID, roomID, content stri
 	if content == "" && len(attachments) == 0 {
 		return domainmessaging.Message{}, domainmessaging.ErrInvalidRoom // 텍스트도 첨부도 없음
 	}
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
-		return domainmessaging.Message{}, err
-	}
-	members, err := s.rooms.Members(ctx, roomID)
+	members, err := s.membersRequiring(ctx, roomID, actorID)
 	if err != nil {
 		return domainmessaging.Message{}, err
 	}
@@ -179,10 +176,7 @@ func (s *Service) broadcastPresence(ctx context.Context, memberID string, online
 
 // RoomPresence 는 방 멤버 중 현재 온라인인 멤버 ID 를 반환한다(멤버만).
 func (s *Service) RoomPresence(ctx context.Context, actorID, roomID string) ([]string, error) {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
-		return nil, err
-	}
-	members, err := s.rooms.Members(ctx, roomID)
+	members, err := s.membersRequiring(ctx, roomID, actorID)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +308,9 @@ func (s *Service) AdminDeleteMessage(ctx context.Context, messageID string) erro
 		return err
 	}
 	msg.Content, msg.DeletedAt = "", deletedAt
-	s.broadcastMessageEvent(ctx, "message_deleted", msg)
+	if members, mErr := s.rooms.Members(ctx, msg.RoomID); mErr == nil {
+		s.broadcastMessageEvent(members, "message_deleted", msg)
+	}
 	return nil
 }
 
@@ -357,7 +353,7 @@ func (s *Service) EditMessage(ctx context.Context, actorID, roomID, messageID, c
 	if content == "" {
 		return domainmessaging.Message{}, domainmessaging.ErrInvalidRoom
 	}
-	msg, err := s.ownMessage(ctx, actorID, roomID, messageID)
+	msg, members, err := s.ownMessage(ctx, actorID, roomID, messageID)
 	if err != nil {
 		return domainmessaging.Message{}, err
 	}
@@ -369,13 +365,13 @@ func (s *Service) EditMessage(ctx context.Context, actorID, roomID, messageID, c
 		return domainmessaging.Message{}, err
 	}
 	msg.Content, msg.EditedAt = content, editedAt
-	s.broadcastMessageEvent(ctx, "message_edited", msg)
+	s.broadcastMessageEvent(members, "message_edited", msg)
 	return msg, nil
 }
 
 // DeleteMessage 는 본인 메시지를 소프트 삭제한다(멤버·발신자 본인만). 삭제 후 message_deleted 를 브로드캐스트.
 func (s *Service) DeleteMessage(ctx context.Context, actorID, roomID, messageID string) error {
-	msg, err := s.ownMessage(ctx, actorID, roomID, messageID)
+	msg, members, err := s.ownMessage(ctx, actorID, roomID, messageID)
 	if err != nil {
 		return err
 	}
@@ -387,32 +383,33 @@ func (s *Service) DeleteMessage(ctx context.Context, actorID, roomID, messageID 
 		return err
 	}
 	msg.Content, msg.DeletedAt = "", deletedAt
-	s.broadcastMessageEvent(ctx, "message_deleted", msg)
+	s.broadcastMessageEvent(members, "message_deleted", msg)
 	return nil
 }
 
 // ownMessage 는 메시지를 조회하고 (방 일치 + 멤버 + 발신자 본인)을 검증한다.
-func (s *Service) ownMessage(ctx context.Context, actorID, roomID, messageID string) (domainmessaging.Message, error) {
+// 브로드캐스트에 쓰도록 방 멤버 목록도 함께 반환한다(멤버십 검사와 같은 조회).
+func (s *Service) ownMessage(ctx context.Context, actorID, roomID, messageID string) (domainmessaging.Message, []string, error) {
 	msg, err := s.messages.GetMessage(ctx, messageID)
 	if err != nil {
-		return domainmessaging.Message{}, err
+		return domainmessaging.Message{}, nil, err
 	}
 	if msg.RoomID != roomID {
-		return domainmessaging.Message{}, domainmessaging.ErrMessageNotFound
+		return domainmessaging.Message{}, nil, domainmessaging.ErrMessageNotFound
 	}
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
-		return domainmessaging.Message{}, err
+	members, err := s.membersRequiring(ctx, roomID, actorID)
+	if err != nil {
+		return domainmessaging.Message{}, nil, err
 	}
 	if msg.SenderID != actorID {
-		return domainmessaging.Message{}, domainmessaging.ErrNotSender
+		return domainmessaging.Message{}, nil, domainmessaging.ErrNotSender
 	}
-	return msg, nil
+	return msg, members, nil
 }
 
 // broadcastMessageEvent 는 메시지 수정/삭제 이벤트를 방 멤버에게 전송한다.
-func (s *Service) broadcastMessageEvent(ctx context.Context, eventType string, msg domainmessaging.Message) {
-	members, err := s.rooms.Members(ctx, msg.RoomID)
-	if err != nil || len(members) == 0 {
+func (s *Service) broadcastMessageEvent(members []string, eventType string, msg domainmessaging.Message) {
+	if len(members) == 0 {
 		return
 	}
 	if payload, mErr := json.Marshal(outboundEvent{Type: eventType, Message: msgToDTO(msg)}); mErr == nil {
@@ -422,14 +419,15 @@ func (s *Service) broadcastMessageEvent(ctx context.Context, eventType string, m
 
 // MarkRead 는 방을 "지금까지" 읽음 처리하고 방 멤버에게 read 이벤트를 브로드캐스트한다(멤버만).
 func (s *Service) MarkRead(ctx context.Context, actorID, roomID string) (int64, error) {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
+	members, err := s.membersRequiring(ctx, roomID, actorID)
+	if err != nil {
 		return 0, err
 	}
 	readAt := s.now().UTC().Unix()
 	if err := s.rooms.MarkRead(ctx, roomID, actorID, readAt); err != nil {
 		return 0, err
 	}
-	if members, err := s.rooms.Members(ctx, roomID); err == nil && len(members) > 0 {
+	if len(members) > 0 {
 		if payload, mErr := json.Marshal(outboundEvent{
 			Type: "read",
 			Read: &readDTO{RoomID: roomID, MemberID: actorID, LastReadAt: readAt},
@@ -493,19 +491,13 @@ func (s *Service) ReadStates(ctx context.Context, actorID, roomID string) ([]dom
 
 // RoomMembers 는 방의 멤버 ID 목록을 반환한다(멤버만).
 func (s *Service) RoomMembers(ctx context.Context, actorID, roomID string) ([]string, error) {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
-		return nil, err
-	}
-	return s.rooms.Members(ctx, roomID)
+	return s.membersRequiring(ctx, roomID, actorID)
 }
 
 // RoomMembersDetail 은 방 멤버를 이름(username/display_name) 포함으로 반환한다(멤버십 스코프).
 // 디렉터리에서 해석되지 않는 id 는 이름 없이(ID 만) 포함해 클라가 UUID 폴백할 수 있게 한다.
 func (s *Service) RoomMembersDetail(ctx context.Context, actorID, roomID string) ([]domainmessaging.MemberInfo, error) {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
-		return nil, err
-	}
-	ids, err := s.rooms.Members(ctx, roomID)
+	ids, err := s.membersRequiring(ctx, roomID, actorID)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +519,8 @@ func (s *Service) RoomMembersDetail(ctx context.Context, actorID, roomID string)
 // AddMembers 는 단체 방에 멤버를 추가한다(멤버만, group 한정). 추가 후 전체 멤버 목록을 반환하고
 // 새로 추가된 멤버마다 member_joined 이벤트를 방 전원에게 브로드캐스트한다.
 func (s *Service) AddMembers(ctx context.Context, actorID, roomID string, memberIDs []string) ([]string, error) {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
+	existing, err := s.membersRequiring(ctx, roomID, actorID)
+	if err != nil {
 		return nil, err
 	}
 	room, err := s.rooms.Get(ctx, roomID)
@@ -536,10 +529,6 @@ func (s *Service) AddMembers(ctx context.Context, actorID, roomID string, member
 	}
 	if room.Type != domainmessaging.RoomGroup {
 		return nil, domainmessaging.ErrInvalidRoom // 1:1 방은 멤버 변경 불가
-	}
-	existing, err := s.rooms.Members(ctx, roomID)
-	if err != nil {
-		return nil, err
 	}
 	have := make(map[string]struct{}, len(existing))
 	for _, m := range existing {
@@ -567,7 +556,8 @@ func (s *Service) AddMembers(ctx context.Context, actorID, roomID string, member
 
 // LeaveRoom 은 actor 가 단체 방에서 나간다(group 한정). 나가기 전 남은 멤버에게 member_left 를 브로드캐스트한다.
 func (s *Service) LeaveRoom(ctx context.Context, actorID, roomID string) error {
-	if err := s.requireMember(ctx, roomID, actorID); err != nil {
+	members, err := s.membersRequiring(ctx, roomID, actorID)
+	if err != nil {
 		return err
 	}
 	room, err := s.rooms.Get(ctx, roomID)
@@ -576,10 +566,6 @@ func (s *Service) LeaveRoom(ctx context.Context, actorID, roomID string) error {
 	}
 	if room.Type != domainmessaging.RoomGroup {
 		return domainmessaging.ErrInvalidRoom // 1:1 방은 나가기 불가
-	}
-	members, err := s.rooms.Members(ctx, roomID)
-	if err != nil {
-		return err
 	}
 	if err := s.rooms.RemoveMember(ctx, roomID, actorID); err != nil {
 		return err
@@ -631,6 +617,21 @@ func (s *Service) requireMember(ctx context.Context, roomID, memberID string) er
 		return domainmessaging.ErrNotMember
 	}
 	return nil
+}
+
+// membersRequiring 은 방 멤버 목록이 어차피 필요한 경로에서 멤버십 검사를 같은 조회로 끝낸다
+// (IsMember + Members 2왕복 → Members 1왕복). 목록이 필요 없는 경로는 requireMember 를 쓴다.
+func (s *Service) membersRequiring(ctx context.Context, roomID, actorID string) ([]string, error) {
+	members, err := s.rooms.Members(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range members {
+		if m == actorID {
+			return members, nil
+		}
+	}
+	return nil, domainmessaging.ErrNotMember
 }
 
 // outboundEvent 는 WS 로 내보내는 이벤트 포맷이다.

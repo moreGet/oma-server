@@ -1,0 +1,70 @@
+{{define "content"}}
+{{if .CanManage}}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <span class="badge text-bg-success">online {{.Data.Online}}</span>
+  <span class="badge text-bg-warning">stale {{.Data.Stale}}</span>
+  <span class="badge text-bg-secondary">offline {{.Data.Offline}}</span>
+  <small class="text-secondary ms-auto">status 는 heartbeat 경과로 서버가 계산합니다 (새로고침 시 갱신)</small>
+</div>
+
+<div class="card">
+  <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+    <span class="fw-semibold"><i class="bi bi-diagram-3 me-1"></i> 등록된 에이전트</span>
+    <small class="text-secondary">{{len .Data.Agents}}개</small>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>이름</th>
+          <th>Status</th>
+          <th>Endpoint</th>
+          <th>Capabilities</th>
+          <th>Model</th>
+          <th>마지막 Heartbeat</th>
+          <th>Owner</th>
+          <th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Data.Agents}}
+        <tr>
+          <td>
+            <div class="fw-semibold">{{.Name}}</div>
+            {{if .Version}}<small class="text-secondary">v{{.Version}}</small>{{end}}
+          </td>
+          <td>
+            {{if eq .Status "online"}}<span class="badge text-bg-success">online</span>
+            {{else if eq .Status "stale"}}<span class="badge text-bg-warning">stale</span>
+            {{else}}<span class="badge text-bg-secondary">offline</span>{{end}}
+          </td>
+          <td><span class="mono">{{.Endpoint}}</span></td>
+          <td>
+            {{if .Capabilities}}<small>{{.Capabilities}}</small>{{else}}<small class="text-secondary">—</small>{{end}}
+            {{if .Tags}}<br><small class="text-secondary">{{.Tags}}</small>{{end}}
+          </td>
+          <td>{{if .Model}}<span class="mono">{{.Model}}</span>{{else}}<small class="text-secondary">—</small>{{end}}</td>
+          <td><small>{{if .LastHeartbeat}}{{.LastHeartbeat}}{{else}}<span class="text-secondary">—</span>{{end}}</small></td>
+          <td><small>{{.Owner}}</small></td>
+          <td class="text-end">
+            <form method="post" action="/admin/agents/{{.ID}}/delete" class="d-inline"
+                  onsubmit="return confirm('에이전트 [{{.Name}}] 등록을 강제 해제할까요?\n(에이전트가 살아 있으면 다음 재등록 때 새 agent_id 로 다시 나타납니다)');">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="강제 해제"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="8" class="text-center text-secondary py-4">등록된 에이전트가 없습니다. 헤드리스 에이전트가 <code>POST /api/v1/agents/register</code> 로 등록하면 여기에 표시됩니다.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+<p class="text-secondary small mt-3 mb-0">
+  생존성: <span class="text-success">online</span> = lease TTL 이내 heartbeat · <span class="text-warning">stale</span> = 3×TTL 이내 · <span class="text-secondary">offline</span> = 그 이상.
+  발견 API(<code>GET /api/v1/agents</code>)는 기본으로 online+stale 만 반환합니다.
+</p>
+{{else}}
+<div class="alert alert-info">관리자만 접근할 수 있습니다.</div>
+{{end}}
+{{end}}

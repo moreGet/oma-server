@@ -3,7 +3,7 @@
 OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽스. 인증은 JWT Bearer.
 
 **에러 envelope (두 종류)**
-- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
+- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`, **에이전트 레지스트리 `/agents*`**): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
 - **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**, **`/chat/rooms*`**·**`/chat/ws`**): `{ "error": { "code": "bad_request", "message": "..." } }`
   소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
 
@@ -387,7 +387,7 @@ curl -N -X POST localhost:8080/api/v1/agent/chat \
 ### 도구 정책 / 클라이언트 버전 / 명령 보안 (user, 선택 기능)
 서버 미구현/오류 시 클라는 graceful(정책 없음=전체 허용, 버전 알림 생략, 명령 보안=클라 디폴트만).
 - **도구 정책**(`tools/policy`)·**명령 보안**(`security/command-policy`)은 **DB(전역 `tool_policy_settings` + 멤버별 `member_tool_policy`)**, **클라이언트 버전**(`client/version`)은 **DB(`client_version_settings`)** 에 저장되고 어드민(`/admin/tools` 전역, `/admin/members` 멤버별, `/admin/client`)에서 편집한다(즉시 반영, atomic 캐시). yaml 설정 아님.
-- **도구 카탈로그**: 클라이언트가 노출하는 **29개** 도구명은 서버 상수(`domain/toolpolicy` `ClientTools`)이자 DB 시드(`tool_catalog`, 마이그레이션 00020 + 00023)로 고정되어, 어드민이 허용/차단을 자유 문자열 대신 **고정 목록(카테고리 리스트)** 에서 고른다(오타 방지). 카테고리는 **셸 / 파일 / 시스템 / 문서·데이터 / 압축 / 에이전트** 6종.
+- **도구 카탈로그**: 클라이언트가 노출하는 **33개** 도구명은 서버 상수(`domain/toolpolicy` `ClientTools`)이자 DB 시드(`tool_catalog`, 마이그레이션 00020·00023·00024·00025)로 고정되어, 어드민이 허용/차단을 자유 문자열 대신 **고정 목록(카테고리 리스트)** 에서 고른다(오타 방지). 카테고리는 **셸 / 파일 / 시스템 / 문서·데이터 / 압축 / 에이전트** 6종.
 
 | 메서드·경로 | 기능 |
 |---|---|
@@ -448,6 +448,73 @@ LLM 호출 자체가 일어나지 않으므로 모델은 그 도구의 존재를
 
 - **설정**: 어드민 `/admin/tools`(DB `tool_policy_settings`). 비우면 `{"blocked_patterns":[],"blocked_paths":[]}`.
 - 서버는 도구 끄는 필드를 두지 않는다(디폴트 약화 불가) — 2중 안전.
+
+---
+
+## 에이전트 레지스트리 (Agent Registry) — 등록·발견·생존성·A2A 토큰 브로커
+
+헤드리스 에이전트(C# Host)들이 자기를 등록하고 서로를 발견하는 전화번호부. 실제 에이전트 간 대화(A2A)는
+에이전트끼리 직접 SSE 로 하고, **이 서버는 등록·발견·생존성 + 호출 토큰 발급(브로커)만** 담당한다(v1, 중계 아님).
+모든 엔드포인트는 JWT Bearer(user↑) · **평면 에러 envelope**. §공유 계약(`PROMPT-go-server.md` ↔ `PROMPT-client-host.md`)과 동기 — 필드 변경 시 두 문서를 함께 갱신할 것.
+
+### Agent 레코드
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `agent_id` | string(uuid) | 서버 발급. register 응답으로 반환 |
+| `name` | string | **소유자 범위 내 고유**. 사람이 읽는 식별자 |
+| `endpoint_url` | string | A2A 리스너 base URL(`http/https` 절대 URL). 호출자가 여기에 `/api/v1/agent/chat` 붙여 접속 |
+| `capabilities` | string[] | 자유 태그(예: `["code-review","korean-nlp"]`). 발견 필터 키 |
+| `tags` | string[] | (선택) 환경/그룹 태그(예: `["prod","gpu"]`) |
+| `model` | string | (선택) 주 모델 id |
+| `version` | string | (선택) Host 버전 |
+| `status` | enum | **서버가 read 시 계산**: `online` / `stale` / `offline` |
+| `last_heartbeat_at` | RFC3339 | 마지막 heartbeat 시각(UTC) |
+
+### 생존성(liveness)
+`online`: `now - last_heartbeat_at < lease_ttl` · `stale`: `< 3×lease_ttl` · 그 이상 `offline`.
+기본값(config `registry`): heartbeat_interval **15s**, lease_ttl **45s**. register/heartbeat 응답의 두 값이 클라이언트 루프 주기를 결정한다.
+offline 로 24h+ 방치된 레코드는 sweeper(`registry.sweep_interval`, 기본 5m, `"0s"`=비활성)가 정리한다.
+
+### 엔드포인트
+| 메서드·경로 | 최소 역할 | 기능 |
+|---|---|---|
+| `POST /api/v1/agents/register` | user | 등록(**업서트**: 같은 `(owner, name)` 재등록이면 기존 `agent_id` 유지 + endpoint/capabilities 갱신) |
+| `POST /api/v1/agents/{id}/heartbeat` | user(소유자) | 생존 신호. 없는 id·**타인 소유**면 404(존재 은닉) → 클라는 **재-register 로 자가 치유** |
+| `DELETE /api/v1/agents/{id}` | user(소유자) | 우아한 해제. 204 |
+| `GET /api/v1/agents` | user | 발견. query: `capability`·`tag`·`status`·`q`(자유 텍스트)·`exclude_self`. **기본은 online+stale 만** 반환 |
+| `GET /api/v1/agents/{id}` | user | 단건 조회(404 가능) |
+| `POST /api/v1/agents/{id}/token` | user | **A2A 호출 토큰 발급(브로커)**. `{id}`=호출 대상. 본문 없음. 대상 미존재 404 |
+| `GET /api/v1/agents/a2a-public-key` | user | 수신측 서명 검증용 공개키(기동 시 1회 취득·캐시, 미지의 `kid` 수신 시 재취득) |
+
+```jsonc
+// POST /agents/register  req
+{ "name": "reviewer", "endpoint_url": "http://10.0.0.5:8080",
+  "capabilities": ["code-review"], "tags": ["prod"], "model": "gpt-4o-mini", "version": "1.0.0" }
+// resp 200
+{ "agent_id": "…uuid…", "lease_ttl_seconds": 45, "heartbeat_interval_seconds": 15 }
+
+// POST /agents/{id}/heartbeat  resp 200
+{ "status": "online", "lease_ttl_seconds": 45 }
+
+// GET /agents?capability=code-review  resp 200
+{ "agents": [ { "agent_id": "…", "name": "reviewer", "endpoint_url": "http://10.0.0.5:8080",
+    "capabilities": ["code-review"], "tags": ["prod"], "model": "gpt-4o-mini",
+    "status": "online", "last_heartbeat_at": "2026-07-25T12:00:00Z" } ] }
+
+// POST /agents/{id}/token  resp 200 (본문 없음)
+{ "token": "eyJhbGciOiJFUzI1NiIs…", "expires_in_seconds": 120, "audience_agent_id": "…대상 agent_id…" }
+
+// GET /agents/a2a-public-key  resp 200
+{ "kid": "…uuid…", "alg": "ES256", "public_key_pem": "-----BEGIN PUBLIC KEY-----\n…" }
+```
+
+### A2A 인증(에이전트→에이전트) — v1 토큰 브로커
+- **ES256(ECDSA P-256) compact JWT**. 클레임: `iss`=`"ohmyagent-server"` · `sub`=호출자 member id · `cid`=호출자 agent_id(소유 에이전트가 1개일 때만 특정, 로그 상관관계용) · `aud`=대상 agent_id · `iat`/`exp`(기본 **120s**, config `registry.token_ttl`) · `jti`(uuid). 헤더에 `kid`.
+- **호출 흐름**: 발견 → `POST /agents/{target}/token` → `Authorization: Bearer <token>` + `X-A2A-Hop` 으로 대상 직접 호출.
+- **수신 검증(대상 에이전트, 로컬 — 서버 왕복 없음)**: 캐시된 공개키로 서명 검증 → `aud`==자기 agent_id → `exp`/`iat` 시계 오차 ±60s 허용. 실패 401. 재생 방지 캐시는 v1 미구현(120s 창 허용).
+- **키 관리**: 서버가 P-256 키쌍을 생성·영속(개인키는 `APP_ENCRYPTION_SECRET` AES-GCM 암호화, `a2a_keys` 테이블). v1 단일 활성 키, 회전은 수동(새 kid 발급 시 수신측이 재취득으로 추종). **`APP_ENCRYPTION_SECRET` 변경 시 기존 키 복호화가 실패해 기동이 중단**되므로 운영에서 시크릿을 바꾸려면 `a2a_keys` 행을 비활성화/삭제 후 재기동(새 키 자동 생성).
+
+어드민 콘솔 `/admin/agents`(admin↑)에서 등록 에이전트·status 뱃지·수동 강제 해제를 제공한다.
 
 ---
 

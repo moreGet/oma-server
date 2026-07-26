@@ -142,11 +142,13 @@
 
         {{if .CanManage}}
         {{/* AI 섹션 */}}
-        <button class="nav-sec-toggle{{if ne .Active "providers"}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-ai" aria-expanded="{{if eq .Active "providers"}}true{{else}}false{{end}}">
+        {{$ai := or (eq .Active "providers") (eq .Active "agents")}}
+        <button class="nav-sec-toggle{{if not $ai}} collapsed{{end}}" type="button" data-bs-toggle="collapse" data-bs-target="#sec-ai" aria-expanded="{{if $ai}}true{{else}}false{{end}}">
           <span><i class="bi bi-cpu me-1"></i> AI</span><i class="bi bi-chevron-down chev"></i>
         </button>
-        <div class="collapse{{if eq .Active "providers"}} show{{end}}" id="sec-ai">
+        <div class="collapse{{if $ai}} show{{end}}" id="sec-ai">
           <a class="nav-link {{if eq .Active "providers"}}active{{end}}" href="/admin/providers"><i class="bi bi-hdd-stack"></i> Provider</a>
+          <a class="nav-link {{if eq .Active "agents"}}active{{end}}" href="/admin/agents"><i class="bi bi-diagram-3"></i> 에이전트</a>
         </div>
         {{end}}
 

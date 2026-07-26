@@ -101,7 +101,7 @@ func (r *ChatSessionRepository) Update(ctx context.Context, s domainchatsession.
 	if err != nil {
 		return fmt.Errorf("update session id=%s: %w", s.ID, err)
 	}
-	return checkSessionAffected(res)
+	return affectedOrNotFound(res, domainchatsession.ErrNotFound)
 }
 
 // Delete 는 소유자 스코프 삭제. 0행 → ErrNotFound.
@@ -110,7 +110,7 @@ func (r *ChatSessionRepository) Delete(ctx context.Context, ownerID, id string) 
 	if err != nil {
 		return fmt.Errorf("delete session id=%s: %w", id, err)
 	}
-	return checkSessionAffected(res)
+	return affectedOrNotFound(res, domainchatsession.ErrNotFound)
 }
 
 // scanSession 은 한 행을 domainchatsession.Session 으로 스캔한다(sessionColumns 순서와 일치).
@@ -128,16 +128,4 @@ func scanSession(s rowScanner) (domainchatsession.Session, error) {
 	sess.CreatedAt = time.Unix(createdAt, 0).UTC()
 	sess.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	return sess, nil
-}
-
-// checkSessionAffected 는 0행 영향을 ErrNotFound 로 변환한다(도메인별 별개 구현).
-func checkSessionAffected(res sql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return domainchatsession.ErrNotFound
-	}
-	return nil
 }

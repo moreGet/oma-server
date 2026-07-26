@@ -278,9 +278,9 @@ func claudeToolInputSchema(raw []byte) anthropic.ToolInputSchemaParam {
 // ChatStream 은 Anthropic Messages API 를 스트리밍 호출해 텍스트 델타는 즉시 onChunk(Delta)로 보낸다.
 // tool_use 블록은 누적된 최종 메시지에서 추출해 마지막 Done 조각에 담는다(onChunk 에러 시 중단).
 func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.ChatRequest, onChunk func(domainllmprovider.ChatStreamChunk) error) error {
-	apiKey := resolveAPIKey(a.apiKey, a.apiKeyEnv)
-	if apiKey == "" {
-		return fmt.Errorf("claude: %w: API key not set (set config api_key or api_key_env)", domainllmprovider.ErrUpstream)
+	apiKey, err := requireAPIKey("claude", a.apiKey, a.apiKeyEnv)
+	if err != nil {
+		return err
 	}
 
 	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
@@ -317,6 +317,8 @@ func (a *ClaudeAdapter) ChatStream(ctx context.Context, req domainllmprovider.Ch
 	}
 
 	stream := client.Messages.NewStreaming(ctx, params)
+	// Next() 는 EOF 에도 응답 바디를 닫지 않는다 — Close 없이는 조기 반환(accumulate/onChunk 에러)마다 커넥션 누수.
+	defer func() { _ = stream.Close() }()
 
 	// 누적기: 스트림 이벤트로 최종 메시지(텍스트/사고/tool_use/stop_reason/usage)를 조립한다.
 	message := anthropic.Message{}

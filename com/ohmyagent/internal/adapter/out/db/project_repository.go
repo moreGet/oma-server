@@ -92,8 +92,8 @@ func (r *ProjectRepository) DeleteProject(ctx context.Context, ownerID, id strin
 	if err != nil {
 		return fmt.Errorf("project: delete: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return domainproject.ErrNotFound
+	if err := affectedOrNotFound(res, domainproject.ErrNotFound); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM conversations WHERE owner_id=? AND project_id=?", ownerID, id); err != nil {
 		return fmt.Errorf("project: cascade delete conversations: %w", err)

@@ -39,6 +39,17 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	Auth      AuthConfig      `yaml:"auth"`
 	Messaging MessagingConfig `yaml:"messaging"`
+	Registry  RegistryConfig  `yaml:"registry"`
+}
+
+// RegistryConfig 는 에이전트 레지스트리(등록·발견·생존성·A2A 토큰 브로커) 설정이다.
+// heartbeat_interval/lease_ttl 은 register/heartbeat 응답으로 내려가 클라이언트 루프 주기를 결정한다.
+// 미설정(0) 시 유스케이스 권장 기본값(15s/45s/120s)을 쓴다.
+type RegistryConfig struct {
+	HeartbeatInterval Duration `yaml:"heartbeat_interval"` // 권장 15s
+	LeaseTTL          Duration `yaml:"lease_ttl"`          // 권장 45s(= 3×interval)
+	TokenTTL          Duration `yaml:"token_ttl"`          // A2A 브로커 토큰 수명(권장 120s)
+	SweepInterval     Duration `yaml:"sweep_interval"`     // offline 오래된 레코드 정리 주기. 0 = 비활성
 }
 
 // MessagingConfig 는 채팅 실시간 전파 방식 설정이다.

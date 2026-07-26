@@ -29,6 +29,7 @@ import (
 	sessionstore "aiagent/com/ohmyagent/internal/adapter/out/sessionstore"
 	transcriptout "aiagent/com/ohmyagent/internal/adapter/out/transcript"
 	agentapp "aiagent/com/ohmyagent/internal/application/agent"
+	agentregistryapp "aiagent/com/ohmyagent/internal/application/agentregistry"
 	authapp "aiagent/com/ohmyagent/internal/application/auth"
 	chatapp "aiagent/com/ohmyagent/internal/application/chat"
 	chatsessionapp "aiagent/com/ohmyagent/internal/application/chatsession"
@@ -157,6 +158,13 @@ func run() error {
 	messagingRepo := dbout.NewMessagingRepository(conn, cfg.Database.Driver)
 	messagingService := messagingapp.NewService(messagingRepo, messagingRepo, dbout.NewChatAttachmentStore(conn), messagingHub, messagingBroadcaster)
 	messagingService.SetMemberDirectory(dbout.NewMemberDirectoryRepository(conn)) // 채팅 멤버 이름 해석(UUID→username/display_name)
+	// 에이전트 레지스트리(등록·발견·생존성) + A2A 토큰 브로커(ES256 서명 키 bootstrap — 없으면 생성·암호화 저장).
+	registryUC := agentregistryapp.NewService(dbout.NewAgentRegistryRepository(conn, cfg.Database.Driver), authUC,
+		cfg.Registry.HeartbeatInterval.Std(), cfg.Registry.LeaseTTL.Std())
+	registryUC.SetMemberDirectory(dbout.NewMemberDirectoryRepository(conn)) // 어드민 owner 이름 표시
+	if err := registryUC.EnableBroker(context.Background(), dbout.NewA2AKeyRepository(conn), cryptoout.NewES256Signer(), providerCipher, cfg.Registry.TokenTTL.Std()); err != nil {
+		return err
+	}
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
 	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
 	// 에이전트 루프(tools/function-calling) 중계. 도구 정책은 요청 게이트로 강제한다
@@ -173,114 +181,32 @@ func run() error {
 	seedCancel()
 
 	// 6) 핸들러
-	authH := httpin.NewAuthHandler(authUC)
-	provH := httpin.NewProviderHandler(providerUC)
-	chatH := httpin.NewChatHandler(chatUC, transcriptRecorder, quotaService)
-	agentH := httpin.NewAgentHandler(agentUC, transcriptRecorder, transcriptManager.StripAttachments, quotaService)
-	healthH := httpin.NewHealthHandler(conn)
-	modelsH := httpin.NewModelsHandler(providerUC)
-	suggestionH := httpin.NewSuggestionHandler()
-	sessionH := httpin.NewSessionHandler(sessionUC)
-	statsH := httpin.NewStatsHandler(authUC, providerUC)
-	quotaH := httpin.NewQuotaHandler(quotaService)
-	projectH := httpin.NewProjectHandler(projectService)
-	messagingH := httpin.NewMessagingHandler(messagingService)
-	chatWSH := httpin.NewChatWSHandler(messagingService)
 	clientVersionManager, err := clientversionapp.NewManager(dbout.NewClientVersionRepository(conn), authUC)
 	if err != nil {
 		return err
 	}
-	clientH := httpin.NewClientHandler(clientVersionManager, toolPolicyManager)
-	memberToolPolicyH := httpin.NewMemberToolPolicyHandler(toolPolicyManager)
-	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, toolPolicyManager, clientVersionManager, messagingService, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
+	h := apiHandlers{
+		auth:             httpin.NewAuthHandler(authUC),
+		provider:         httpin.NewProviderHandler(providerUC),
+		chat:             httpin.NewChatHandler(chatUC, transcriptRecorder, quotaService),
+		agent:            httpin.NewAgentHandler(agentUC, transcriptRecorder, transcriptManager.StripAttachments, quotaService),
+		health:           httpin.NewHealthHandler(conn),
+		models:           httpin.NewModelsHandler(providerUC),
+		suggestion:       httpin.NewSuggestionHandler(),
+		session:          httpin.NewSessionHandler(sessionUC),
+		stats:            httpin.NewStatsHandler(authUC, providerUC),
+		quota:            httpin.NewQuotaHandler(quotaService),
+		project:          httpin.NewProjectHandler(projectService),
+		messaging:        httpin.NewMessagingHandler(messagingService),
+		chatWS:           httpin.NewChatWSHandler(messagingService),
+		client:           httpin.NewClientHandler(clientVersionManager, toolPolicyManager),
+		memberToolPolicy: httpin.NewMemberToolPolicyHandler(toolPolicyManager),
+		agentReg:         httpin.NewAgentRegistryHandler(registryUC),
+	}
+	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, toolPolicyManager, clientVersionManager, messagingService, registryUC, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
 	// 7) 라우트 등록(설계 §7)
-	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
-
-	router.Public("POST /api/v1/auth/login", httpin.Handle(authH.Login))
-
-	// 본인 정보·비밀번호·역할목록(인증된 사용자)
-	router.Secured("GET /api/v1/me", httpin.Handle(authH.Me), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("PUT /api/v1/me/password", httpin.Handle(authH.ChangePassword), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/me/quota", httpin.Handle(quotaH.Me), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/users/me", httpin.HandleAgent(authH.Profile), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/roles", httpin.Handle(authH.ListRoles), security.MinRole(domainauth.RoleLevelUser))
-
-	router.Secured("GET /api/v1/members", httpin.Handle(authH.ListMembers), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("POST /api/v1/members", httpin.Handle(authH.CreateMember), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("GET /api/v1/members/{id}", httpin.Handle(authH.GetMember), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("PUT /api/v1/members/{id}/role", httpin.Handle(authH.ChangeRole), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("PUT /api/v1/members/{id}/active", httpin.Handle(authH.SetActive), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("DELETE /api/v1/members/{id}", httpin.Handle(authH.DeleteMember), security.MinRole(domainauth.RoleLevelSuperAdmin))
-	router.Secured("PUT /api/v1/members/{id}/password", httpin.Handle(authH.ResetPassword), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("GET /api/v1/members/{id}/tool-policy", httpin.Handle(memberToolPolicyH.Get), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("PUT /api/v1/members/{id}/tool-policy", httpin.Handle(memberToolPolicyH.Put), security.MinRole(domainauth.RoleLevelAdmin))
-
-	router.Secured("GET /api/v1/llm-providers", httpin.Handle(provH.List), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/llm-providers/{id}", httpin.Handle(provH.Get), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/llm-providers", httpin.Handle(provH.Create), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("PATCH /api/v1/llm-providers/{id}/config", httpin.Handle(provH.UpdateConfig), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("PUT /api/v1/llm-providers/{id}/activate", httpin.Handle(provH.Activate), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("DELETE /api/v1/llm-providers/{id}", httpin.Handle(provH.Delete), security.MinRole(domainauth.RoleLevelAdmin))
-	router.Secured("POST /api/v1/llm-providers/{id}/test", httpin.Handle(provH.Test), security.MinRole(domainauth.RoleLevelAdmin))
-
-	// 대시보드 집계(admin↑)
-	router.Secured("GET /api/v1/statistics", httpin.Handle(statsH.Get), security.MinRole(domainauth.RoleLevelAdmin))
-
-	// 질의(클라이언트 → 활성 LLM → SSE 응답). 인증된 사용자(user↑) 누구나.
-	router.Secured("POST /api/v1/chat", httpin.Handle(chatH.Stream), security.MinRole(domainauth.RoleLevelUser))
-
-	// --- C# 에이전트 클라이언트 계약(API_CONTRACT) ---
-	// 에러 envelope 은 클라이언트 계약대로 { "error": { code, message } } (HandleAgent).
-	router.Public("GET /api/v1/health", httpin.HandleAgent(healthH.Check)) // 헬스/연결 체크(인증 불필요)
-
-	router.Secured("GET /api/v1/models", httpin.HandleAgent(modelsH.List), security.MinRole(domainauth.RoleLevelUser))
-
-	// 에이전트 루프의 심장: 대화기록 + 도구스키마 → SSE(텍스트/도구호출/stop_reason).
-	router.Secured("POST /api/v1/agent/chat", httpin.HandleAgent(agentH.Chat), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/agent/suggestions", httpin.HandleAgent(suggestionH.List), security.MinRole(domainauth.RoleLevelUser))
-
-	// 클라이언트 계약: 도구 정책 게이트 + 버전 점검(둘 다 선택 기능, graceful).
-	router.Secured("GET /api/v1/tools/policy", httpin.HandleAgent(clientH.ToolsPolicy), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/tools/authorize", httpin.HandleAgent(clientH.ToolsAuthorize), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/client/version", httpin.HandleAgent(clientH.ClientVersion), security.MinRole(domainauth.RoleLevelUser))
-	// 서버 제어형 위험명령/경로 차단 패턴(클라 디폴트에 추가만 — 2중 안전). 미설정 시 빈 목록.
-	router.Secured("GET /api/v1/security/command-policy", httpin.HandleAgent(clientH.CommandPolicy), security.MinRole(domainauth.RoleLevelUser))
-
-	// 채팅 히스토리 서버 동기화(소유권 스코프).
-	router.Secured("GET /api/v1/agent/sessions", httpin.HandleAgent(sessionH.List), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Get), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("PUT /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Upsert), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("DELETE /api/v1/agent/sessions/{id}", httpin.HandleAgent(sessionH.Delete), security.MinRole(domainauth.RoleLevelUser))
-
-	// 프로젝트/대화 동기화(클라 로컬 우선 → 서버 동기화, 소유권 스코프, 중첩 envelope).
-	router.Secured("GET /api/v1/projects", httpin.HandleAgent(projectH.List), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/projects", httpin.HandleAgent(projectH.Upsert), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/projects/{id}", httpin.HandleAgent(projectH.Get), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("DELETE /api/v1/projects/{id}", httpin.HandleAgent(projectH.Delete), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/projects/{id}/conversations", httpin.HandleAgent(projectH.UpsertConversation), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("DELETE /api/v1/projects/{id}/conversations/{cid}", httpin.HandleAgent(projectH.DeleteConversation), security.MinRole(domainauth.RoleLevelUser))
-
-	// 사용자 간 실시간 채팅(단체/1:1). WS 는 Bearer 헤더로 인증. REST 는 방/이력 관리.
-	router.Secured("GET /api/v1/chat/ws", httpin.HandleAgent(chatWSH.Serve), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/rooms", httpin.HandleAgent(messagingH.ListRooms), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/rooms", httpin.HandleAgent(messagingH.CreateGroup), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/rooms/direct", httpin.HandleAgent(messagingH.CreateDirect), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/rooms/{id}/messages", httpin.HandleAgent(messagingH.History), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/rooms/{id}/messages", httpin.HandleAgent(messagingH.SendMessage), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("PATCH /api/v1/chat/rooms/{id}/messages/{mid}", httpin.HandleAgent(messagingH.EditMessage), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("DELETE /api/v1/chat/rooms/{id}/messages/{mid}", httpin.HandleAgent(messagingH.DeleteMessage), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/rooms/{id}/read", httpin.HandleAgent(messagingH.MarkRead), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/rooms/{id}/reads", httpin.HandleAgent(messagingH.ReadStates), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/unread", httpin.HandleAgent(messagingH.Unread), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/rooms/{id}/members", httpin.HandleAgent(messagingH.RoomMembers), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/rooms/{id}/members", httpin.HandleAgent(messagingH.AddMembers), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("DELETE /api/v1/chat/rooms/{id}/members/{mid}", httpin.HandleAgent(messagingH.Kick), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/rooms/{id}/leave", httpin.HandleAgent(messagingH.Leave), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/rooms/{id}/presence", httpin.HandleAgent(messagingH.Presence), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/mentions", httpin.HandleAgent(messagingH.Mentions), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("POST /api/v1/chat/attachments", httpin.HandleAgent(messagingH.UploadAttachment), security.MinRole(domainauth.RoleLevelUser))
-	router.Secured("GET /api/v1/chat/attachments/{aid}", httpin.HandleAgent(messagingH.DownloadAttachment), security.MinRole(domainauth.RoleLevelUser))
+	router := registerRoutes(tokenSvc, h)
 
 	// 어드민 웹 페이지(htmx + html/template, 쿠키 인증) 마운트: /admin
 	webServer.Register(router.Mux())
@@ -302,6 +228,8 @@ func run() error {
 
 	// 대화 이력 보존(TTL) purge 백그라운드 잡(종료 시 ctx 로 정리).
 	go transcriptManager.RunPurge(ctx, transcriptPurgeInterval)
+	// 에이전트 레지스트리 sweeper: offline 로 오래 방치된 레코드 정리(sweep_interval=0 이면 내부에서 즉시 종료).
+	go registryUC.RunSweeper(ctx, cfg.Registry.SweepInterval.Std())
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -443,4 +371,125 @@ func seedSampleProvider(ctx context.Context, log *slog.Logger, providers domainl
 			log.Info("seed provider created", "name", sample.Name)
 		}
 	}
+}
+
+// apiHandlers 는 라우트 등록에 필요한 HTTP 핸들러 묶음이다(run 의 #6 조립 결과).
+type apiHandlers struct {
+	auth             *httpin.AuthHandler
+	provider         *httpin.ProviderHandler
+	chat             *httpin.ChatHandler
+	agent            *httpin.AgentHandler
+	health           *httpin.HealthHandler
+	models           *httpin.ModelsHandler
+	suggestion       *httpin.SuggestionHandler
+	session          *httpin.SessionHandler
+	stats            *httpin.StatsHandler
+	quota            *httpin.QuotaHandler
+	project          *httpin.ProjectHandler
+	messaging        *httpin.MessagingHandler
+	chatWS           *httpin.ChatWSHandler
+	client           *httpin.ClientHandler
+	memberToolPolicy *httpin.MemberToolPolicyHandler
+	agentReg         *httpin.AgentRegistryHandler
+}
+
+// registerRoutes 는 API 라우트를 등록한 SecureRouter 를 만든다(설계 §7 — run 의 #7 구획 분리).
+func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.SecureRouter {
+	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
+
+	router.Public("POST /api/v1/auth/login", httpin.Handle(h.auth.Login))
+
+	// 본인 정보·비밀번호·역할목록(인증된 사용자)
+	router.Secured("GET /api/v1/me", httpin.Handle(h.auth.Me), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("PUT /api/v1/me/password", httpin.Handle(h.auth.ChangePassword), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/me/quota", httpin.Handle(h.quota.Me), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/users/me", httpin.HandleAgent(h.auth.Profile), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/roles", httpin.Handle(h.auth.ListRoles), security.MinRole(domainauth.RoleLevelUser))
+
+	router.Secured("GET /api/v1/members", httpin.Handle(h.auth.ListMembers), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("POST /api/v1/members", httpin.Handle(h.auth.CreateMember), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/members/{id}", httpin.Handle(h.auth.GetMember), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("PUT /api/v1/members/{id}/role", httpin.Handle(h.auth.ChangeRole), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("PUT /api/v1/members/{id}/active", httpin.Handle(h.auth.SetActive), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("DELETE /api/v1/members/{id}", httpin.Handle(h.auth.DeleteMember), security.MinRole(domainauth.RoleLevelSuperAdmin))
+	router.Secured("PUT /api/v1/members/{id}/password", httpin.Handle(h.auth.ResetPassword), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/members/{id}/tool-policy", httpin.Handle(h.memberToolPolicy.Get), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("PUT /api/v1/members/{id}/tool-policy", httpin.Handle(h.memberToolPolicy.Put), security.MinRole(domainauth.RoleLevelAdmin))
+
+	router.Secured("GET /api/v1/llm-providers", httpin.Handle(h.provider.List), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/llm-providers/{id}", httpin.Handle(h.provider.Get), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/llm-providers", httpin.Handle(h.provider.Create), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("PATCH /api/v1/llm-providers/{id}/config", httpin.Handle(h.provider.UpdateConfig), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("PUT /api/v1/llm-providers/{id}/activate", httpin.Handle(h.provider.Activate), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("DELETE /api/v1/llm-providers/{id}", httpin.Handle(h.provider.Delete), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("POST /api/v1/llm-providers/{id}/test", httpin.Handle(h.provider.Test), security.MinRole(domainauth.RoleLevelAdmin))
+
+	// 대시보드 집계(admin↑)
+	router.Secured("GET /api/v1/statistics", httpin.Handle(h.stats.Get), security.MinRole(domainauth.RoleLevelAdmin))
+
+	// 질의(클라이언트 → 활성 LLM → SSE 응답). 인증된 사용자(user↑) 누구나.
+	router.Secured("POST /api/v1/chat", httpin.Handle(h.chat.Stream), security.MinRole(domainauth.RoleLevelUser))
+
+	// --- C# 에이전트 클라이언트 계약(API_CONTRACT) ---
+	// 에러 envelope 은 클라이언트 계약대로 { "error": { code, message } } (HandleAgent).
+	router.Public("GET /api/v1/health", httpin.HandleAgent(h.health.Check)) // 헬스/연결 체크(인증 불필요)
+
+	router.Secured("GET /api/v1/models", httpin.HandleAgent(h.models.List), security.MinRole(domainauth.RoleLevelUser))
+
+	// 에이전트 루프의 심장: 대화기록 + 도구스키마 → SSE(텍스트/도구호출/stop_reason).
+	router.Secured("POST /api/v1/agent/chat", httpin.HandleAgent(h.agent.Chat), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agent/suggestions", httpin.HandleAgent(h.suggestion.List), security.MinRole(domainauth.RoleLevelUser))
+
+	// 클라이언트 계약: 도구 정책 게이트 + 버전 점검(둘 다 선택 기능, graceful).
+	router.Secured("GET /api/v1/tools/policy", httpin.HandleAgent(h.client.ToolsPolicy), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/tools/authorize", httpin.HandleAgent(h.client.ToolsAuthorize), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/client/version", httpin.HandleAgent(h.client.ClientVersion), security.MinRole(domainauth.RoleLevelUser))
+	// 서버 제어형 위험명령/경로 차단 패턴(클라 디폴트에 추가만 — 2중 안전). 미설정 시 빈 목록.
+	router.Secured("GET /api/v1/security/command-policy", httpin.HandleAgent(h.client.CommandPolicy), security.MinRole(domainauth.RoleLevelUser))
+
+	// 채팅 히스토리 서버 동기화(소유권 스코프).
+	router.Secured("GET /api/v1/agent/sessions", httpin.HandleAgent(h.session.List), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agent/sessions/{id}", httpin.HandleAgent(h.session.Get), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("PUT /api/v1/agent/sessions/{id}", httpin.HandleAgent(h.session.Upsert), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/agent/sessions/{id}", httpin.HandleAgent(h.session.Delete), security.MinRole(domainauth.RoleLevelUser))
+
+	// 프로젝트/대화 동기화(클라 로컬 우선 → 서버 동기화, 소유권 스코프, 중첩 envelope).
+	router.Secured("GET /api/v1/projects", httpin.HandleAgent(h.project.List), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/projects", httpin.HandleAgent(h.project.Upsert), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/projects/{id}", httpin.HandleAgent(h.project.Get), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/projects/{id}", httpin.HandleAgent(h.project.Delete), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/projects/{id}/conversations", httpin.HandleAgent(h.project.UpsertConversation), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/projects/{id}/conversations/{cid}", httpin.HandleAgent(h.project.DeleteConversation), security.MinRole(domainauth.RoleLevelUser))
+
+	// 사용자 간 실시간 채팅(단체/1:1). WS 는 Bearer 헤더로 인증. REST 는 방/이력 관리.
+	router.Secured("GET /api/v1/chat/ws", httpin.HandleAgent(h.chatWS.Serve), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/rooms", httpin.HandleAgent(h.messaging.ListRooms), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/rooms", httpin.HandleAgent(h.messaging.CreateGroup), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/rooms/direct", httpin.HandleAgent(h.messaging.CreateDirect), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/rooms/{id}/messages", httpin.HandleAgent(h.messaging.History), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/rooms/{id}/messages", httpin.HandleAgent(h.messaging.SendMessage), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("PATCH /api/v1/chat/rooms/{id}/messages/{mid}", httpin.HandleAgent(h.messaging.EditMessage), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/chat/rooms/{id}/messages/{mid}", httpin.HandleAgent(h.messaging.DeleteMessage), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/rooms/{id}/read", httpin.HandleAgent(h.messaging.MarkRead), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/rooms/{id}/reads", httpin.HandleAgent(h.messaging.ReadStates), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/unread", httpin.HandleAgent(h.messaging.Unread), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/rooms/{id}/members", httpin.HandleAgent(h.messaging.RoomMembers), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/rooms/{id}/members", httpin.HandleAgent(h.messaging.AddMembers), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/chat/rooms/{id}/members/{mid}", httpin.HandleAgent(h.messaging.Kick), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/rooms/{id}/leave", httpin.HandleAgent(h.messaging.Leave), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/rooms/{id}/presence", httpin.HandleAgent(h.messaging.Presence), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/mentions", httpin.HandleAgent(h.messaging.Mentions), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/chat/attachments", httpin.HandleAgent(h.messaging.UploadAttachment), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/chat/attachments/{aid}", httpin.HandleAgent(h.messaging.DownloadAttachment), security.MinRole(domainauth.RoleLevelUser))
+
+	// 에이전트 레지스트리(§공유 계약): 등록·heartbeat·해제·발견 + A2A 토큰 브로커.
+	// 주의: 리터럴 a2a-public-key 가 {id} 보다 우선 매칭된다(Go 1.22+ ServeMux 구체 경로 우선).
+	router.Secured("POST /api/v1/agents/register", httpin.Handle(h.agentReg.Register), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/agents/{id}/heartbeat", httpin.Handle(h.agentReg.Heartbeat), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("DELETE /api/v1/agents/{id}", httpin.Handle(h.agentReg.Deregister), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agents", httpin.Handle(h.agentReg.List), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agents/{id}", httpin.Handle(h.agentReg.Get), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("POST /api/v1/agents/{id}/token", httpin.Handle(h.agentReg.MintToken), security.MinRole(domainauth.RoleLevelUser))
+	router.Secured("GET /api/v1/agents/a2a-public-key", httpin.Handle(h.agentReg.PublicKey), security.MinRole(domainauth.RoleLevelUser))
+	return router
 }
