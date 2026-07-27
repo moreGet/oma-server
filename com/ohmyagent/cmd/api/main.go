@@ -38,6 +38,7 @@ import (
 	messagingapp "aiagent/com/ohmyagent/internal/application/messaging"
 	projectapp "aiagent/com/ohmyagent/internal/application/project"
 	quotaapp "aiagent/com/ohmyagent/internal/application/quota"
+	serviceaccountapp "aiagent/com/ohmyagent/internal/application/serviceaccount"
 	sessionapp "aiagent/com/ohmyagent/internal/application/session"
 	toolpolicyapp "aiagent/com/ohmyagent/internal/application/toolpolicy"
 	transcriptapp "aiagent/com/ohmyagent/internal/application/transcript"
@@ -166,11 +167,14 @@ func run() error {
 		return err
 	}
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
-	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
+	chatUC := chatapp.NewChatService(providerUC) // providerUC 가 활성 어댑터 resolver 를 충족
 	// 에이전트 루프(tools/function-calling) 중계. 도구 정책은 요청 게이트로 강제한다
 	// (차단 도구가 실리면 403 — 모델에 스키마 자체를 넘기지 않는다).
 	agentUC := agentapp.NewAgentService(providerUC, toolPolicyManager)
 	sessionUC := chatsessionapp.NewSessionService(sessionRepo)
+	// 서비스 계정 + 장수 API 키: 관리 유스케이스(admin) + oma_sa_ API키 인증기(Secured 라우터에 주입).
+	// authUC 를 accessGate 로 재사용(admin 인가 + owner 실재 검증). 토큰은 SHA-256 해시만 저장(평문 미보관).
+	serviceAccountUC := serviceaccountapp.NewService(dbout.NewServiceAccountRepository(conn), cryptoout.NewSATokenHasher(), authUC)
 
 	// 5) 시딩: super_admin 은 모든 환경에서 항상 보장(없으면 생성). 샘플 Provider 는 비운영만.
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), seedTimeout)
@@ -202,11 +206,12 @@ func run() error {
 		client:           httpin.NewClientHandler(clientVersionManager, toolPolicyManager),
 		memberToolPolicy: httpin.NewMemberToolPolicyHandler(toolPolicyManager),
 		agentReg:         httpin.NewAgentRegistryHandler(registryUC),
+		serviceAccount:   httpin.NewServiceAccountHandler(serviceAccountUC),
 	}
 	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, toolPolicyManager, clientVersionManager, messagingService, registryUC, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
-	// 7) 라우트 등록(설계 §7)
-	router := registerRoutes(tokenSvc, h)
+	// 7) 라우트 등록(설계 §7). serviceAccountUC 를 API키 인증기로 Secured 라우터에 주입한다.
+	router := registerRoutes(tokenSvc, serviceAccountUC, h)
 
 	// 어드민 웹 페이지(htmx + html/template, 쿠키 인증) 마운트: /admin
 	webServer.Register(router.Mux())
@@ -391,11 +396,13 @@ type apiHandlers struct {
 	client           *httpin.ClientHandler
 	memberToolPolicy *httpin.MemberToolPolicyHandler
 	agentReg         *httpin.AgentRegistryHandler
+	serviceAccount   *httpin.ServiceAccountHandler
 }
 
 // registerRoutes 는 API 라우트를 등록한 SecureRouter 를 만든다(설계 §7 — run 의 #7 구획 분리).
-func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.SecureRouter {
-	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
+// apiKeyAuth 는 서비스 계정 oma_sa_ API 키 인증기다(Secured 라우터가 접두사로 JWT/API키 경로를 분기).
+func registerRoutes(tokenSvc domainauth.TokenService, apiKeyAuth security.APIKeyAuthenticator, h apiHandlers) *security.SecureRouter {
+	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc, security.WithAPIKeyAuth(apiKeyAuth))
 
 	router.Public("POST /api/v1/auth/login", httpin.Handle(h.auth.Login))
 
@@ -491,5 +498,14 @@ func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.S
 	router.Secured("GET /api/v1/agents/{id}", httpin.Handle(h.agentReg.Get), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/agents/{id}/token", httpin.Handle(h.agentReg.MintToken), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/agents/a2a-public-key", httpin.Handle(h.agentReg.PublicKey), security.MinRole(domainauth.RoleLevelUser))
+
+	// 서비스 계정 + 장수 API 키 관리(스펙 §2D — 전부 admin 전용, 유스케이스 RequireAdmin 이중 게이트).
+	// 리터럴 keys 세그먼트가 {id} 와일드카드보다 우선 매칭된다(Go 1.22+ ServeMux).
+	router.Secured("POST /api/v1/service-accounts", httpin.Handle(h.serviceAccount.Create), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/service-accounts", httpin.Handle(h.serviceAccount.List), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("DELETE /api/v1/service-accounts/{id}", httpin.Handle(h.serviceAccount.Delete), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("POST /api/v1/service-accounts/{id}/keys", httpin.Handle(h.serviceAccount.IssueKey), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/service-accounts/{id}/keys", httpin.Handle(h.serviceAccount.ListKeys), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("DELETE /api/v1/service-accounts/{id}/keys/{key_id}", httpin.Handle(h.serviceAccount.RevokeKey), security.MinRole(domainauth.RoleLevelAdmin))
 	return router
 }

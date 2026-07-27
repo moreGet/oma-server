@@ -518,6 +518,62 @@ offline 로 24h+ 방치된 레코드는 sweeper(`registry.sweep_interval`, 기�
 
 ---
 
+## 서비스 계정 + 장수 API 키 (Service Accounts)
+
+사람 로그인과 분리된 **비대화형 계정**과 그 계정에 발급하는 **장수 API 키**. 헤드리스 워커/CI/에이전트 러너가
+`oma_sa_` 접두사 불투명 토큰을 `Authorization: Bearer` 로 실어 기존 헤드리스 경로(`/agent/chat`, `/chat`, `/models` 등)를
+JWT 없이 호출한다. 관리 엔드포인트는 **전부 admin 전용**(평면 에러 envelope).
+
+- **계정 = 독립 id 공간(UUID v4)**. member 로 흡수하지 않는다. 권한은 **user 레벨 고정**(생성 시 role 미지정 — 최소권한).
+- **키 형식 = `oma_sa_<random>` 불투명 토큰**. 서버는 **SHA-256 해시만 저장**(평문 미보관). 평문은 **발급 응답 1회만** 노출된다.
+- **인증 경로**: 라우터가 `oma_sa_` 접두사로 API키/JWT 를 분기 → JWT 경로는 해시조회 부담 0. 인증 성공 시 합성 Claims(`member_id=계정 id`, level=user)로
+  정책 평면(도구정책·토큰쿼터)이 계정 id 로 자연 조회된다.
+- **401 계약**: 미존재·폐기·만료·계정폐기·인프라 오류는 **전부 401**(5xx 없음 — 클라 무한재시도 방지).
+- 계정당 키 **2개 이상 동시 유효**(무중단 회전). 삭제는 soft(감사 추적) — 계정 폐기 시 딸린 키 전부 폐기.
+
+### 시각 필드 표현
+`created_at`·`expires_at`·`last_used_at` 은 **unix epoch seconds `int64`** 다(다른 REST 계약의 RFC3339 와 의도적 이탈 —
+0 sentinel 표현이 필요하기 때문). **`0` = 무기한(expires_at) / 미사용(last_used_at) / 미폐기**를 뜻한다.
+
+### 엔드포인트
+| 메서드·경로 | 최소 역할 | 기능 |
+|---|---|---|
+| `POST /api/v1/service-accounts` | admin | 계정 생성. `owner_member_id` 는 실재 member 여야 함(폐기 책임자). 201 |
+| `GET /api/v1/service-accounts` | admin | 활성 계정 목록(각 계정의 키 메타 포함, **평문 키 제외**). 200 |
+| `DELETE /api/v1/service-accounts/{id}` | admin | 계정 폐기(+딸린 키 전부 폐기). 204 |
+| `POST /api/v1/service-accounts/{id}/keys` | admin | 키 발급. `{expires_at?}`(0/생략=무기한, 지정 시 미래여야 400 아님). 201 — **평문 `token` 여기서만** |
+| `GET /api/v1/service-accounts/{id}/keys` | admin | 키 메타 목록(폐기 포함, 평문 제외). 200 |
+| `DELETE /api/v1/service-accounts/{id}/keys/{key_id}` | admin | 키 폐기. 204 |
+
+```jsonc
+// POST /service-accounts  req
+{ "name": "ci-runner", "owner_member_id": "…member uuid…", "description": "GitHub Actions" }
+// resp 201
+{ "id": "…sa uuid…", "name": "ci-runner" }
+
+// GET /service-accounts  resp 200
+{ "service_accounts": [ {
+  "id": "…", "name": "ci-runner", "description": "GitHub Actions",
+  "owner_member_id": "…", "created_at": 1769500000, "revoked": false,
+  "keys": [ { "key_id": "…", "created_at": 1769500000, "expires_at": 0,
+             "last_used_at": 1769600000, "revoked": false } ] } ] }
+
+// POST /service-accounts/{id}/keys  req  (expires_at 생략=무기한)
+{ "expires_at": 1801036800 }
+// resp 201  — token(평문)은 이 응답에만 노출, 이후 조회 불가
+{ "key_id": "…", "token": "oma_sa_AbC…", "expires_at": 1801036800 }
+
+// GET /service-accounts/{id}/keys  resp 200
+{ "keys": [ { "key_id": "…", "created_at": 1769500000, "expires_at": 0,
+              "last_used_at": 0, "revoked": false } ] }
+```
+
+- **에러 매핑**: 입력 검증(빈 name/owner, 과거 expires_at) → 400 · 계정/키 미존재 → 404 · 비-admin → 403.
+- **owner_member_id 미존재** → 400(`owner_member_id does not exist`).
+- `last_used_at` 은 방치 키 탐지용 운영 위생 필드. 인증 성공 시 best-effort 갱신(스로틀 60s — 인증마다 DB 왕복하지 않음).
+
+---
+
 ## 관리자(Admin) 기능
 
 ### 권한 모델 (요구 3)
