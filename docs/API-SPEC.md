@@ -541,9 +541,16 @@ JWT 없이 호출한다. 관리 엔드포인트는 **전부 admin 전용**(평�
 | `POST /api/v1/service-accounts` | admin | 계정 생성. `owner_member_id` 는 실재 member 여야 함(폐기 책임자). 201 |
 | `GET /api/v1/service-accounts` | admin | 활성 계정 목록(각 계정의 키 메타 포함, **평문 키 제외**). 200 |
 | `DELETE /api/v1/service-accounts/{id}` | admin | 계정 폐기(+딸린 키 전부 폐기). 204 |
-| `POST /api/v1/service-accounts/{id}/keys` | admin | 키 발급. `{expires_at?}`(0/생략=무기한, 지정 시 미래여야 400 아님). 201 — **평문 `token` 여기서만** |
+| `POST /api/v1/service-accounts/{id}/keys` | admin | 키 발급. `{expires_at?}`(0/생략=무기한, 지정 시 **90일 이상 미래**여야 함). 201 — **평문 `token` 여기서만** |
 | `GET /api/v1/service-accounts/{id}/keys` | admin | 키 메타 목록(폐기 포함, 평문 제외). 200 |
 | `DELETE /api/v1/service-accounts/{id}/keys/{key_id}` | admin | 키 폐기. 204 |
+
+### 키 최소 수명 — 90일 하한 (서버 강제, 2026-07-27~)
+`expires_at` 을 지정하면 **발급 시점 기준 90일 이상 미래**여야 한다. 무기한(`0`/생략)은 하한 적용 대상이 아니다.
+초단기 키가 발급되면 헤드리스가 조기 401 로 죽기 때문에 스펙 §2B("무기한 또는 90일 이상")를 서버가 발급 시점에 강제한다.
+- 과거·현재 → 400 `expires_at must be in the future`
+- 미래지만 90일 미만 → 400 `expires_at must be at least 90 days in the future`
+- 경계: 정확히 `now + 90d` 는 **통과**. 하한은 발급 시각에만 적용되며, 이미 발급된 키의 검증(인증 경로)은 변경 없음.
 
 ```jsonc
 // POST /service-accounts  req
@@ -568,7 +575,7 @@ JWT 없이 호출한다. 관리 엔드포인트는 **전부 admin 전용**(평�
               "last_used_at": 0, "revoked": false } ] }
 ```
 
-- **에러 매핑**: 입력 검증(빈 name/owner, 과거 expires_at) → 400 · 계정/키 미존재 → 404 · 비-admin → 403.
+- **에러 매핑**: 입력 검증(빈 name/owner, 과거 expires_at, **90일 미만 expires_at**) → 400 · 계정/키 미존재 → 404 · 비-admin → 403.
 - **owner_member_id 미존재** → 400(`owner_member_id does not exist`).
 - `last_used_at` 은 방치 키 탐지용 운영 위생 필드. 인증 성공 시 best-effort 갱신(스로틀 60s — 인증마다 DB 왕복하지 않음).
 

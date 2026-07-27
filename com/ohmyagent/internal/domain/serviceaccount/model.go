@@ -28,6 +28,11 @@ func (e *ErrValidation) Error() string { return e.Msg }
 // 라우터가 이 접두사로 API키/JWT 경로를 분기하고, 발급 시 평문 토큰 앞에 붙는다.
 const TokenPrefix = "oma_sa_"
 
+// MinKeyLifetime 은 만료를 지정한 키의 최소 수명이다(스펙 §2B "무기한 또는 90일 이상").
+// 초단기 키가 발급되면 헤드리스가 조기 401 로 죽으므로 서버가 발급 시점에 강제한다.
+// 무기한(ExpiresAt zero)은 이 하한의 적용 대상이 아니다.
+const MinKeyLifetime = 90 * 24 * time.Hour
+
 // --- 엔티티 ---
 
 // ServiceAccount 는 사람과 구분되는 비대화형 계정이다(별도 id 공간, member 로 흡수 안 함).
@@ -107,11 +112,18 @@ type IssueKeyCommand struct {
 	ExpiresAt time.Time // zero = 무기한
 }
 
-// Validate 는 ExpiresAt 이 지정되면 미래여야 함을 검증한다(과거·현재 → 400).
-// 90일 하한은 클라이언트 운영 가이드이며 서버는 강제하지 않는다.
+// Validate 는 ExpiresAt 이 지정되면 미래여야 하고(과거·현재 → 400),
+// 최소 수명 MinKeyLifetime(90일) 이상이어야 함을 검증한다(초단기 키 → 400).
+// 무기한(zero)은 두 검증 모두 통과한다.
 func (c *IssueKeyCommand) Validate(now time.Time) error {
-	if !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now) {
+	if c.ExpiresAt.IsZero() {
+		return nil
+	}
+	if !c.ExpiresAt.After(now) {
 		return &ErrValidation{Msg: "expires_at must be in the future"}
+	}
+	if c.ExpiresAt.Before(now.Add(MinKeyLifetime)) {
+		return &ErrValidation{Msg: "expires_at must be at least 90 days in the future"}
 	}
 	return nil
 }

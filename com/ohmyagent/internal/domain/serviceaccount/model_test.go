@@ -122,9 +122,21 @@ func TestIssueKeyCommand_Validate(t *testing.T) {
 		c := IssueKeyCommand{}
 		require.NoError(t, c.Validate(testNow))
 	})
-	t.Run("미래 만료 → 정상", func(t *testing.T) {
-		c := IssueKeyCommand{ExpiresAt: testNow.Add(time.Hour)}
+	t.Run("90일 이상 미래 만료 → 정상", func(t *testing.T) {
+		c := IssueKeyCommand{ExpiresAt: testNow.Add(MinKeyLifetime)}
+		require.NoError(t, c.Validate(testNow), "경계: 정확히 90일 → 통과")
+		c = IssueKeyCommand{ExpiresAt: testNow.Add(MinKeyLifetime + time.Hour)}
 		require.NoError(t, c.Validate(testNow))
+	})
+	t.Run("미래지만 90일 미만 → ErrValidation(최소 수명)", func(t *testing.T) {
+		c := IssueKeyCommand{ExpiresAt: testNow.Add(time.Hour)}
+		err := c.Validate(testNow)
+		var ve *ErrValidation
+		require.ErrorAs(t, err, &ve)
+		assert.Equal(t, "expires_at must be at least 90 days in the future", ve.Msg)
+
+		c = IssueKeyCommand{ExpiresAt: testNow.Add(MinKeyLifetime - time.Second)}
+		require.ErrorAs(t, c.Validate(testNow), &ve, "경계: 90일 - 1s → 거부")
 	})
 	t.Run("과거 만료 → ErrValidation", func(t *testing.T) {
 		c := IssueKeyCommand{ExpiresAt: testNow.Add(-time.Second)}
