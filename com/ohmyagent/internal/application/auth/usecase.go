@@ -60,7 +60,9 @@ func (u *AuthUseCase) Login(ctx context.Context, cmd domainauth.LoginCommand) (s
 	if err != nil {
 		return "", domainauth.Member{}, fmt.Errorf("generate token: %w", err)
 	}
-	slog.Info("login succeeded", "event", "auth.login", "username", member.Username, "member_id", member.ID, "level", int(member.Role.Level))
+	// 속성 키로 "level" 을 쓰면 slog 내장 레벨 키와 충돌해 JSON 에 level 이 두 번 실린다.
+	// 파서는 대개 뒤엣것을 취하므로 레코드의 심각도가 역할 레벨 숫자로 덮어써진다(= 감사 로그가 INFO 로 안 잡힘).
+	slog.Info("login succeeded", "event", "auth.login", "username", member.Username, "member_id", member.ID, "role_level", int(member.Role.Level))
 	return token, member, nil
 }
 
@@ -98,6 +100,15 @@ func (u *AuthUseCase) ListMembers(ctx context.Context, actorID string, filter do
 		return nil, 0, err
 	}
 	return u.members.List(ctx, filter)
+}
+
+// CountMembersByRole 은 admin↑ 만 호출 가능한 역할별 인원 집계를 반환한다(역할ID→인원, total).
+// 카운트만 필요한 화면이 ListMembers 로 멤버 전량을 적재하지 않게 하는 경로다.
+func (u *AuthUseCase) CountMembersByRole(ctx context.Context, actorID string) (map[int]int, int, error) {
+	if err := u.RequireAdmin(ctx, actorID); err != nil {
+		return nil, 0, err
+	}
+	return u.members.CountByRole(ctx)
 }
 
 // GetMember 는 본인 또는 admin↑ 만 조회 가능하다.

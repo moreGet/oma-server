@@ -171,23 +171,30 @@ func (s *Service) Status(ctx context.Context, memberID string) (domainquota.Stat
 
 // --- 어드민(읽기는 페이지가 이미 admin 게이트, 쓰기는 RequireAdmin) ---
 
-// Snapshot 은 전역 기본값 + 멤버별 한도/사용량(이번 일·주·월) + 기간 키를 반환한다.
-func (s *Service) Snapshot(ctx context.Context) (domainquota.Snapshot, error) {
-	now := s.now()
-	keys := domainquota.PeriodKeys{
-		Daily:   domainquota.PeriodKey(domainquota.Daily, now),
-		Weekly:  domainquota.PeriodKey(domainquota.Weekly, now),
-		Monthly: domainquota.PeriodKey(domainquota.Monthly, now),
-	}
+// SnapshotFor 는 주어진 멤버들의 전역 기본값 + 한도/사용량(이번 일·주·월) + 기간 키를 반환한다.
+//
+// 조회 범위가 항상 인자로 들어온 멤버로 묶인다 — 어드민 목록은 한 페이지(수십~수백 명)만
+// 뿌리므로, 한도·사용량 테이블을 통째로 읽으면 보유량이 표시 대상이 아니라 전체 멤버 수에 비례한다.
+func (s *Service) SnapshotFor(ctx context.Context, memberIDs []string) (domainquota.Snapshot, error) {
+	keys := s.periodKeys()
 	def, err := s.repo.DefaultLimits(ctx)
 	if err != nil {
 		return domainquota.Snapshot{}, err
 	}
-	limits, err := s.repo.AllMemberLimits(ctx)
-	if err != nil {
+	snap := domainquota.Snapshot{
+		Default: def,
+		Keys:    keys,
+		Limits:  map[string]domainquota.Limits{},
+		Usage:   map[string]domainquota.Limits{},
+	}
+	if len(memberIDs) == 0 {
+		return snap, nil // 조회할 대상이 없다(빈 IN 절은 유효한 SQL 이 아니다).
+	}
+
+	if snap.Limits, err = s.repo.MemberLimitsByIDs(ctx, memberIDs); err != nil {
 		return domainquota.Snapshot{}, err
 	}
-	usage := make(map[string]domainquota.Limits)
+	usage := make(map[string]domainquota.Limits, len(memberIDs))
 	for _, step := range []struct {
 		key string
 		set func(*domainquota.Limits, int)
@@ -196,7 +203,7 @@ func (s *Service) Snapshot(ctx context.Context) (domainquota.Snapshot, error) {
 		{keys.Weekly, func(l *domainquota.Limits, v int) { l.Weekly = v }},
 		{keys.Monthly, func(l *domainquota.Limits, v int) { l.Monthly = v }},
 	} {
-		m, err := s.repo.UsageByPeriod(ctx, step.key)
+		m, err := s.repo.UsageByPeriodForMembers(ctx, step.key, memberIDs)
 		if err != nil {
 			return domainquota.Snapshot{}, err
 		}
@@ -206,7 +213,18 @@ func (s *Service) Snapshot(ctx context.Context) (domainquota.Snapshot, error) {
 			usage[id] = u
 		}
 	}
-	return domainquota.Snapshot{Default: def, Keys: keys, Limits: limits, Usage: usage}, nil
+	snap.Usage = usage
+	return snap, nil
+}
+
+// periodKeys 는 현재 시각의 일/주/월 기간 키를 만든다.
+func (s *Service) periodKeys() domainquota.PeriodKeys {
+	now := s.now()
+	return domainquota.PeriodKeys{
+		Daily:   domainquota.PeriodKey(domainquota.Daily, now),
+		Weekly:  domainquota.PeriodKey(domainquota.Weekly, now),
+		Monthly: domainquota.PeriodKey(domainquota.Monthly, now),
+	}
 }
 
 // SetDefaultLimits 는 전역 기본 한도를 설정한다(admin↑). 음수는 0(무제한)으로 보정.

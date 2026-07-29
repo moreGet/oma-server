@@ -31,7 +31,7 @@ type sessionManager interface {
 	UpdateSettings(ctx context.Context, cmd domainproject.UpdateSettingsCommand) error
 	TestConnection(ctx context.Context, actorID string) error
 	SetMemberLimit(ctx context.Context, actorID, memberID string, max int) error
-	MemberLimits(ctx context.Context) (map[string]int, error)
+	MemberLimitsFor(ctx context.Context, memberIDs []string) (map[string]int, error)
 	DefaultMaxSessions() int
 }
 
@@ -44,7 +44,7 @@ type transcriptManager interface {
 
 // quotaManager 는 어드민 토큰 한도 관리가 사용하는 소비자 인터페이스다(*quotaapp.Service 가 충족).
 type quotaManager interface {
-	Snapshot(ctx context.Context) (domainquota.Snapshot, error)
+	SnapshotFor(ctx context.Context, memberIDs []string) (domainquota.Snapshot, error)
 	SetDefaultLimits(ctx context.Context, actorID string, l domainquota.Limits) error
 	SetMemberLimits(ctx context.Context, actorID, memberID string, l domainquota.Limits) error
 	ResetUsage(ctx context.Context, actorID, memberID string) error
@@ -55,7 +55,7 @@ type toolPolicyManager interface {
 	GetSettings(ctx context.Context, actorID string) (domaintoolpolicy.Settings, error)
 	UpdateSettings(ctx context.Context, cmd domaintoolpolicy.UpdateCommand) error
 	UpdateMemberPolicy(ctx context.Context, cmd domaintoolpolicy.MemberUpdateCommand) error
-	MemberPolicies() map[string]domaintoolpolicy.MemberPolicy
+	MemberPoliciesFor(ids []string) map[string]domaintoolpolicy.MemberPolicy
 }
 
 // clientVersionManager 는 어드민 클라이언트 버전 편집이 사용하는 소비자 인터페이스다(*clientversionapp.Manager 가 충족).

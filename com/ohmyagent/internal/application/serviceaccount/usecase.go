@@ -103,13 +103,18 @@ func (s *Service) ListAccounts(ctx context.Context, actorID string) ([]domainser
 	if err != nil {
 		return nil, err
 	}
+	// 계정마다 키를 따로 조회하면 계정 N개에 쿼리 N+1 건이 나간다. 한 번에 받아 묶는다.
+	ids := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		ids = append(ids, a.ID)
+	}
+	keysByAccount, err := s.repo.ListKeysByAccounts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]domainserviceaccount.AccountWithKeys, 0, len(accounts))
 	for _, a := range accounts {
-		keys, err := s.repo.ListKeysByAccount(ctx, a.ID)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, domainserviceaccount.AccountWithKeys{Account: a, Keys: keys})
+		out = append(out, domainserviceaccount.AccountWithKeys{Account: a, Keys: keysByAccount[a.ID]})
 	}
 	return out, nil
 }

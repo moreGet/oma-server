@@ -33,6 +33,9 @@ type Repository interface {
 	// 키
 	SaveKey(ctx context.Context, k ServiceAccountKey) error
 	ListKeysByAccount(ctx context.Context, accountID string) ([]ServiceAccountKey, error)
+	// ListKeysByAccounts 는 여러 계정의 키를 한 번에 조회해 계정ID별로 묶어 반환한다.
+	// 목록 화면이 계정마다 개별 조회(N+1)를 내지 않게 하는 배치 경로다.
+	ListKeysByAccounts(ctx context.Context, accountIDs []string) (map[string][]ServiceAccountKey, error)
 	RevokeKey(ctx context.Context, accountID, keyID string, now time.Time) error // 0행 → ErrKeyNotFound
 	RevokeKeysByAccount(ctx context.Context, accountID string, now time.Time) error
 	// 인증(단일 JOIN): 해시로 (키 + 소속 계정)을 한 번에 조회. 없으면 ErrKeyNotFound.

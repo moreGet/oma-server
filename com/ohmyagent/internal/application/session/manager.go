@@ -152,9 +152,9 @@ func (m *Manager) SetMemberLimit(ctx context.Context, actorID, memberID string, 
 	return m.limits.Set(ctx, memberID, max)
 }
 
-// MemberLimits 는 멤버별 세션 한도 맵을 반환한다(어드민 표시; 페이지가 이미 admin 게이트).
-func (m *Manager) MemberLimits(ctx context.Context) (map[string]int, error) {
-	return m.limits.All(ctx)
+// MemberLimitsFor 는 주어진 멤버들의 세션 한도만 반환한다(어드민 목록 한 페이지분).
+func (m *Manager) MemberLimitsFor(ctx context.Context, memberIDs []string) (map[string]int, error) {
+	return m.limits.ByIDs(ctx, memberIDs)
 }
 
 // DefaultMaxSessions 는 전역 기본 최대 세션 수를 반환한다.

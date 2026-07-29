@@ -134,12 +134,19 @@ func (m *Manager) UpdateMemberPolicy(ctx context.Context, cmd domaintoolpolicy.M
 	return m.reload(ctx)
 }
 
-// MemberPolicies 는 현재 멤버 오버라이드 스냅샷(복사본)을 반환한다(어드민 목록 표시용, 무락).
-func (m *Manager) MemberPolicies() map[string]domaintoolpolicy.MemberPolicy {
-	out := make(map[string]domaintoolpolicy.MemberPolicy)
-	if mp := m.members.Load(); mp != nil {
-		for k, v := range *mp {
-			out[k] = v
+// MemberPoliciesFor 는 주어진 멤버들의 오버라이드만 담은 스냅샷을 반환한다(무락).
+//
+// 복사량이 전체 오버라이드 수가 아니라 **요청한 id 수**에 묶인다. 오버라이드가 없는 id 는
+// 결과에서 생략되므로(호출부는 zero value 로 '기본' 처리) 반환 맵은 ids 보다 작을 수 있다.
+func (m *Manager) MemberPoliciesFor(ids []string) map[string]domaintoolpolicy.MemberPolicy {
+	out := make(map[string]domaintoolpolicy.MemberPolicy, len(ids))
+	mp := m.members.Load()
+	if mp == nil {
+		return out
+	}
+	for _, id := range ids {
+		if p, ok := (*mp)[id]; ok {
+			out[id] = p
 		}
 	}
 	return out

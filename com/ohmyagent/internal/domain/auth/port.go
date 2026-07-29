@@ -9,6 +9,8 @@ type Service interface {
 
 	// 멤버 관리(§8.1)
 	ListMembers(ctx context.Context, actorID string, filter MemberFilter) ([]Member, int, error)
+	CountMembersByRole(ctx context.Context, actorID string) (map[int]int, int, error) // 역할ID→인원, total
+
 	GetMember(ctx context.Context, actorID, targetID string) (Member, error)
 	CreateMember(ctx context.Context, cmd CreateMemberCommand) (Member, error)
 	UpdateProfile(ctx context.Context, cmd UpdateProfileCommand) (Member, error) // 본인 또는 CanControl 하위 멤버 프로필 변경
@@ -33,6 +35,7 @@ type Repository interface {
 	FindByID(ctx context.Context, id string) (Member, error)                                                                 // 없으면 ErrNotFound
 	FindByUsername(ctx context.Context, username string) (Member, error)                                                     // 없으면 ErrNotFound
 	List(ctx context.Context, filter MemberFilter) ([]Member, int, error)                                                    // total 포함
+	CountByRole(ctx context.Context) (map[int]int, int, error)                                                               // 역할ID→인원 집계 + total(멤버 행 미적재)
 	Delete(ctx context.Context, id string) error                                                                             // 0행 → ErrNotFound
 	UpdatePassword(ctx context.Context, id, passwordHash string, updatedAt int64, updatedBy string) error                    // 0행 → ErrNotFound
 	UpdateProfile(ctx context.Context, id, email, displayName, organization string, updatedAt int64, updatedBy string) error // 0행 → ErrNotFound

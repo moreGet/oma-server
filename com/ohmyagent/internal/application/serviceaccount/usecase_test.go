@@ -104,6 +104,20 @@ func (r *fakeRepo) ListKeysByAccount(_ context.Context, accountID string) ([]dom
 	return out, nil
 }
 
+func (r *fakeRepo) ListKeysByAccounts(ctx context.Context, accountIDs []string) (map[string][]domainserviceaccount.ServiceAccountKey, error) {
+	out := make(map[string][]domainserviceaccount.ServiceAccountKey, len(accountIDs))
+	for _, id := range accountIDs {
+		keys, err := r.ListKeysByAccount(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if keys != nil {
+			out[id] = keys
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeRepo) RevokeKey(_ context.Context, accountID, keyID string, _ time.Time) error {
 	for _, k := range r.keys {
 		if k.ID == keyID && k.AccountID == accountID {

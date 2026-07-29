@@ -55,14 +55,8 @@ func (r *QuotaRepository) UsageForPeriods(ctx context.Context, memberID string, 
 	if len(periods) == 0 {
 		return out, nil
 	}
-	args := make([]any, 0, len(periods)+1)
-	args = append(args, memberID)
-	ph := make([]string, len(periods))
-	for i, p := range periods {
-		ph[i] = "?"
-		args = append(args, p)
-	}
-	q := "SELECT period, used_tokens FROM token_usage WHERE member_id=? AND period IN (" + strings.Join(ph, ",") + ")"
+	ph, args := inPlaceholders(periods, memberID)
+	q := "SELECT period, used_tokens FROM token_usage WHERE member_id=? AND period IN (" + ph + ")"
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("quota: usage for periods: %w", err)
@@ -79,9 +73,13 @@ func (r *QuotaRepository) UsageForPeriods(ctx context.Context, memberID string, 
 	return out, rows.Err()
 }
 
-// UsageByPeriod 는 해당 기간 전체 멤버 사용량 맵을 반환한다.
-func (r *QuotaRepository) UsageByPeriod(ctx context.Context, period string) (map[string]int, error) {
-	return r.scanMap(ctx, "SELECT member_id, used_tokens FROM token_usage WHERE period=?", period)
+// UsageByPeriodForMembers 는 해당 기간에서 주어진 멤버들의 사용량만 반환한다.
+func (r *QuotaRepository) UsageByPeriodForMembers(ctx context.Context, period string, memberIDs []string) (map[string]int, error) {
+	if len(memberIDs) == 0 {
+		return map[string]int{}, nil
+	}
+	ph, args := inPlaceholders(memberIDs, period)
+	return r.scanMap(ctx, "SELECT member_id, used_tokens FROM token_usage WHERE period=? AND member_id IN ("+ph+")", args...)
 }
 
 // ResetUsage 는 멤버의 모든 기간 사용량 행을 삭제한다(0으로 초기화).
@@ -120,14 +118,20 @@ func (r *QuotaRepository) SetMemberLimits(ctx context.Context, memberID string, 
 	return nil
 }
 
-// AllMemberLimits 는 하나라도 0 보다 큰 멤버별 한도 맵을 반환한다.
-func (r *QuotaRepository) AllMemberLimits(ctx context.Context) (map[string]domainquota.Limits, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits WHERE daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0")
+// MemberLimitsByIDs 는 주어진 멤버들 중 한도가 설정된(하나라도 0 초과) 행만 반환한다.
+func (r *QuotaRepository) MemberLimitsByIDs(ctx context.Context, memberIDs []string) (map[string]domainquota.Limits, error) {
+	out := make(map[string]domainquota.Limits, len(memberIDs))
+	if len(memberIDs) == 0 {
+		return out, nil
+	}
+	ph, args := inPlaceholders(memberIDs)
+	q := "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits" +
+		" WHERE (daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0) AND member_id IN (" + ph + ")"
+	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("quota: all member limits: %w", err)
+		return nil, fmt.Errorf("quota: member limits by ids: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	out := make(map[string]domainquota.Limits)
 	for rows.Next() {
 		var id string
 		var l domainquota.Limits

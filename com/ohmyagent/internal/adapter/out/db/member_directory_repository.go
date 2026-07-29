@@ -3,8 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"strings"
+	"fmt"
 
 	domainagentregistry "aiagent/com/ohmyagent/internal/domain/agentregistry"
 	domainmessaging "aiagent/com/ohmyagent/internal/domain/messaging"
@@ -31,13 +30,8 @@ func (r *MemberDirectoryRepository) NamesByIDs(ctx context.Context, ids []string
 	if len(ids) == 0 {
 		return out, nil
 	}
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	query := "SELECT id, username, display_name FROM members WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	ph, args := inPlaceholders(ids)
+	query := "SELECT id, username, display_name FROM members WHERE id IN (" + ph + ")"
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("member directory: query: %w", err)

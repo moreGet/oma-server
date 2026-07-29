@@ -103,6 +103,37 @@ func (r *ServiceAccountRepository) SaveKey(ctx context.Context, k domainservicea
 	return nil
 }
 
+// ListKeysByAccounts 는 여러 계정의 키를 단일 쿼리로 조회해 계정ID별로 묶어 반환한다(폐기 포함).
+//
+// 계정마다 ListKeysByAccount 를 부르면 계정 N개에 쿼리 N건이 나간다(N+1). IN 절로 한 번에 받고
+// 앱단에서 그룹핑한다. 각 그룹의 정렬은 ListKeysByAccount 와 동일하게 생성 시각 내림차순이며,
+// ORDER BY 에 sa_id 를 앞세워 계정별 묶음 안에서 그 순서가 유지되게 한다.
+func (r *ServiceAccountRepository) ListKeysByAccounts(ctx context.Context, accountIDs []string) (map[string][]domainserviceaccount.ServiceAccountKey, error) {
+	out := make(map[string][]domainserviceaccount.ServiceAccountKey, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	ph, args := inPlaceholders(accountIDs)
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT "+serviceAccountKeyColumns+" FROM service_account_keys WHERE sa_id IN ("+
+			ph+") ORDER BY sa_id, created_at DESC", args...)
+	if err != nil {
+		return nil, fmt.Errorf("service account: list keys by accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		k, err := scanKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("service account: scan key: %w", err)
+		}
+		out[k.AccountID] = append(out[k.AccountID], k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("service account: rows: %w", err)
+	}
+	return out, nil
+}
+
 // ListKeysByAccount 는 계정에 딸린 키 전부를 조회한다(폐기 포함). 생성 시각 내림차순.
 func (r *ServiceAccountRepository) ListKeysByAccount(ctx context.Context, accountID string) ([]domainserviceaccount.ServiceAccountKey, error) {
 	rows, err := r.db.QueryContext(ctx,
