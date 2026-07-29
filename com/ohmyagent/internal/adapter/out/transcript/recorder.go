@@ -45,7 +45,8 @@ func (r *AsyncRecorder) run() {
 	for t := range r.ch {
 		ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
 		if err := r.store.Save(ctx, t); err != nil {
-			slog.Warn("transcript save failed", "event", "transcript.save", "id", t.ID, "source", string(t.Source), "error", err)
+			// "source" 는 AddSource 가 켜진 환경(local/dev)에서 slog 내장 호출위치 키와 충돌한다.
+			slog.Warn("transcript save failed", "event", "transcript.save", "id", t.ID, "transcript_source", string(t.Source), "error", err)
 		}
 		cancel()
 	}

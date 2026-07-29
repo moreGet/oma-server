@@ -94,7 +94,8 @@ func (r *SecureRouter) Secured(pattern string, handler http.HandlerFunc, opts ..
 			return
 		}
 		if claims.Level < opt.minLevel {
-			slog.Debug("auth rejected", "event", "auth.reject", "reason", "insufficient role", "level", int(claims.Level), "need", int(opt.minLevel), "method", req.Method, "path", req.URL.Path)
+			// "level" 은 slog 내장 레벨 키와 충돌하므로 쓰지 않는다(JSON 중복 키 → 심각도가 덮어써진다).
+			slog.Debug("auth rejected", "event", "auth.reject", "reason", "insufficient role", "role_level", int(claims.Level), "need", int(opt.minLevel), "method", req.Method, "path", req.URL.Path)
 			writeAuthError(w, http.StatusForbidden, "FORBIDDEN", "insufficient role")
 			return
 		}
