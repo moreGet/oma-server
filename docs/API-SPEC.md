@@ -3,9 +3,9 @@
 OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽스. 인증은 JWT Bearer.
 
 **에러 envelope (두 종류)**
-- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`, **에이전트 레지스트리 `/agents*`**): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
-- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**, **`/chat/rooms*`**·**`/chat/ws`**): `{ "error": { "code": "bad_request", "message": "..." } }`
-  소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
+- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`, **에이전트 레지스트리 `/agents*`**, **서비스 계정 `/service-accounts*`**): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | PAYLOAD_TOO_LARGE | UNSUPPORTED_MEDIA_TYPE | BAD_GATEWAY | INTERNAL_ERROR`
+- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**, **`/chat/rooms*`**·**`/chat/attachments*`**·**`/chat/mentions`**·**`/chat/unread`**·**`/chat/ws`**): `{ "error": { "code": "bad_request", "message": "..." } }`
+  소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error | malformed_body | payload_too_large | unsupported_encoding`
 
 ---
 
@@ -21,11 +21,39 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 | **404** | `NOT_FOUND` | `not_found` | 리소스 없음 | 멤버/Provider/프로젝트/대화 없음, **활성 LLM Provider 없음**(`no active llm provider`), 미구현 선택 엔드포인트 |
 | **405** | `METHOD_NOT_ALLOWED` | `backend_error` | 미허용 메서드 | 라우터에 없는 메서드 |
 | **409** | `CONFLICT` | `backend_error` | 충돌 | 중복(예: username 중복 생성) |
+| **413** | `PAYLOAD_TOO_LARGE` | `payload_too_large` | 본문 과대 | **gzip 해제 후** 크기가 라우트 상한을 초과(zip bomb 방어). 압축 없는 과대 본문은 종전대로 400 |
+| **415** | `UNSUPPORTED_MEDIA_TYPE` | `unsupported_encoding` | 미지원 인코딩 | `Content-Encoding` 이 `gzip`/`identity` 가 아님. multipart 엔드포인트에 압축 본문을 보낸 경우 포함 |
 | **429** | `TOO_MANY_REQUESTS` | `rate_limited` | 한도 초과 | **토큰 쿼터(일/주/월) 초과** 또는 **세션 저장 캡 초과**. 인증과 무관 |
 | **500** | `INTERNAL_ERROR` | `backend_error` | 서버 오류 | 미처리 예외/패닉(복구되어 500 반환) |
 | **502** | `BAD_GATEWAY` | `backend_error` | 업스트림 오류 | LLM 호출 실패, 어댑터가 채팅 미지원(예: 잘못된 설정) |
 
 > 중첩 envelope 매핑은 **HTTP 상태 기준**이다: 400→`bad_request`, 401→`unauthorized`, 403→`forbidden`, 404→`not_found`, 429→`rate_limited`, **그 외(405/409/500/502)→`backend_error`**.
+> 예외: 압축 관련 오류는 상태만으로 구분되지 않아 명시 코드를 쓴다 — 413→`payload_too_large`, 415→`unsupported_encoding`, 그리고 **깨진 압축 본문은 400 이지만 `malformed_body`**(일반 JSON 문법 오류인 `bad_request` 와 구분).
+
+## 요청 본문 압축 (`Content-Encoding: gzip`)
+
+큰 요청을 보낼 때 본문을 gzip 으로 압축해 보낼 수 있다. **선택 사항이며 하위 호환된다** — 헤더를 붙이지 않으면 종전과 완전히 동일하게 동작한다.
+
+에이전트는 도구를 호출할 때마다 대화 전문을 다시 보내고 그 이력에 소스 원문이 들어 있어 압축이 특히 잘 듣는다(클라이언트 실측 76~80% 감소).
+
+```http
+POST /api/v1/agent/chat HTTP/1.1
+Content-Type: application/json
+Content-Encoding: gzip
+Authorization: Bearer <JWT>
+
+<gzip 압축된 JSON 바이트>
+```
+
+| 항목 | 동작 |
+|---|---|
+| 지원 인코딩 | `gzip` 만. `deflate`/`br` 은 미지원 → 415 |
+| 적용 범위 | **모든 JSON 엔드포인트**(본문 디코더 단일 경로). multipart(첨부 업로드)는 미지원 → 415 |
+| 헤더 부재 / `identity` | 평문 처리(하위 호환) |
+| 크기 상한 | 라우트별 상한이 **압축 전·해제 후 양쪽**에 적용(일반 1 MiB, agent/chat·세션·대화 push 32 MiB) |
+| 해제 방식 | 스트리밍 해제 + 누적 바이트 상한(zip bomb 방어 — 전량 버퍼링 없음) |
+
+**응답 압축**은 리버스 프록시(nginx) 담당이며 `application/json` 에만 적용된다. **SSE(`text/event-stream`)는 압축·버퍼링에서 제외**한다 — gzip 을 걸면 토큰이 실시간으로 흐르지 않고 뭉텅이로 늦게 도착한다. 설정은 `cicd/nginx.conf` 참고.
 
 ### 429 토큰 쿼터 메시지 (상세)
 쿼터 초과 시 `message` 에 **어느 윈도우·사용량·리셋 시각**이 포함된다(클라가 그대로 표시 가능):
