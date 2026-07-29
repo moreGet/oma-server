@@ -409,10 +409,33 @@ func Handle(h HandlerFunc) http.HandlerFunc {
 | `FORBIDDEN` | 403 | 권한 부족 |
 | `NOT_FOUND` | 404 | 리소스 없음 |
 | `METHOD_NOT_ALLOWED` | 405 | 메서드 불가 |
+| `PAYLOAD_TOO_LARGE` | 413 | 본문 크기 상한 초과(압축 해제 후 포함) |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | 지원하지 않는 `Content-Encoding` |
 | `BAD_GATEWAY` | 502 | 외부 서비스(GitLab·AI 등) 오류 |
 | `INTERNAL_ERROR` | 500 | 서버 내부 오류 |
 
-생성 헬퍼: `ErrBadRequest(msg)`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrBadGateway`, `ErrInternal`.
+생성 헬퍼: `ErrBadRequest(msg)`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrBadGateway`, `ErrInternal`, `ErrPayloadTooLarge`, `ErrUnsupportedMediaType`.
+
+**중첩 envelope(agent 계열).** 클라이언트 계약을 따르는 라우트는 `HandleAgent`로 감싸 `{ "error": { "code": "...", "message": "..." } }`(소문자 코드)로 직렬화한다. 코드는 HTTP 상태에서 유도하되, 같은 상태가 여러 의미로 갈리는 경우 `AppError.WithAgentCode(...)`로 명시한다(예: 400 → `bad_request` vs `malformed_body`).
+
+### 5.2.1 요청 본문 압축(`Content-Encoding`)
+
+본문 압축 해제는 **미들웨어가 아니라 본문 디코더(`decodeJSON`)에서** 처리한다. 이유:
+
+- 에러 envelope 이 둘(flat/중첩)인데, 디코더가 `AppError`를 반환하면 각 라우트가 이미 쓰는 envelope 으로 자동 직렬화된다. 미들웨어는 라우트를 모르므로 형식을 하나로 강제하게 된다.
+- 해제 후 크기 상한을 라우트별 `maxBytes`로 그대로 쓸 수 있다(미들웨어는 전역 상수를 하나 더 만들어야 한다).
+
+| 상황 | 응답 |
+|------|------|
+| 헤더 없음 / `identity` | 평문 처리(하위 호환 — 종전과 동일) |
+| `gzip` | 스트리밍 해제. `maxBytes`가 **압축 전·해제 후 양쪽**에 적용 |
+| 그 외 인코딩 | `415` / agent 코드 `unsupported_encoding` |
+| 깨진 압축 본문 | `400` / agent 코드 `malformed_body` |
+| 해제 후 상한 초과 | `413` / agent 코드 `payload_too_large` |
+
+**필수**: 전량 버퍼링 금지. 스트리밍 해제 + 누적 바이트 상한으로 zip bomb 을 막는다. 상한 없이 해제하면 작은 요청 하나로 힙을 고갈시킬 수 있다. 초과 판정 후에는 리더가 **매번 에러를 반환**해야 한다 — 진행 없는 `(0, nil)` 을 돌려주면 호출자가 무한 루프에 빠진다.
+
+JSON 이 아닌 본문(multipart 등)은 이 경로를 타지 않으므로, 압축이 걸려 오면 `requireIdentityEncoding` 으로 `415` 를 반환한다.
 
 ### 5.3 도메인 에러 → HTTP 매핑
 
@@ -457,6 +480,8 @@ loggingMiddleware( CORS( CSRF( mux ) ) )
 ```
 - **CORS/CSRF**: `AllowedOrigins`/`TrustedOrigins` 비면 비활성(로컬 dev). loopback(127.0.0.1, ::1)은 우회. 웹훅 경로는 CSRF 면제.
 - **logging**: method/path/status/duration/remote 구조화 로깅(`slog`).
+- **요청 본문 압축 해제는 여기에 넣지 않는다** — §5.2.1 참고(라우트별 envelope·크기 상한 때문에 디코더에서 처리).
+- **응답 압축은 앱이 하지 않는다** — 리버스 프록시(nginx) 담당. SSE(`text/event-stream`)는 반드시 압축·버퍼링 제외(`cicd/nginx.conf`).
 
 ---
 

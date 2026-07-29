@@ -415,6 +415,11 @@ const multipartMemoryBudget = 1 << 20 // 1 MiB
 // UploadAttachment 는 POST /api/v1/chat/attachments — multipart 파일 업로드 → 첨부 메타데이터(다운로드 URL).
 func (h *MessagingHandler) UploadAttachment(w http.ResponseWriter, r *http.Request) error {
 	claims, _ := security.ClaimsFrom(r.Context())
+	// multipart 는 JSON 디코더(decodeJSON)를 타지 않아 압축 해제 경로가 없다.
+	// 압축된 본문이 오면 파싱이 엉뚱하게 깨지므로 명시적으로 415 로 거절한다.
+	if err := requireIdentityEncoding(r); err != nil {
+		return err
+	}
 	// 본문 크기 상한(헤더/멀티파트 오버헤드 여유 1MiB).
 	r.Body = http.MaxBytesReader(w, r.Body, domainmessaging.MaxAttachmentBytes+(1<<20))
 	if err := r.ParseMultipartForm(multipartMemoryBudget); err != nil {
