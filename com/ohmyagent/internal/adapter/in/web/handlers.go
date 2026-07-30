@@ -230,15 +230,10 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	if pd.CanManageMembers {
 		dv.ShowMembers = true
-		// 멤버를 한 번만 조회하고 역할별 카운트는 메모리에서 집계한다(역할별 추가 쿼리 3회 제거).
-		// 멤버 행 전량 로드는 의도된 트레이드오프: 멤버 수는 관리자 통제로 유한하고,
-		// 역할별 COUNT 3쿼리로 되돌리면 저빈도 페이지에 왕복만 늘어난다.
-		if members, total, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{}); err == nil {
+		// 집계는 DB 에서 GROUP BY 로 끝낸다(쿼리 1회). 예전에는 멤버 행을 전량 힙에 올려
+		// 메모리에서 셌는데, 화면에 필요한 건 숫자 4개뿐이라 보유량이 멤버 수에 비례할 이유가 없다.
+		if counts, total, err := s.auth.CountMembersByRole(r.Context(), actorID(r)); err == nil {
 			dv.MemberTotal = total
-			counts := make(map[int]int, 3)
-			for _, m := range members {
-				counts[m.Role.ID]++
-			}
 			for _, roleID := range []int{domainauth.RoleIDUser, domainauth.RoleIDAdmin, domainauth.RoleIDSuperAdmin} {
 				dv.ByRole = append(dv.ByRole, roleCount{Name: domainauth.NameForRoleID(roleID), Count: counts[roleID]})
 			}
@@ -273,55 +268,86 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 		s.abortTo(w, r, err, "멤버 목록을 볼 권한이 없습니다.", "/")
 		return
 	}
-	// 역할 드롭다운은 actor 가 제어 가능한(자기보다 낮은 레벨) 역할만 노출한다.
-	// 인가 규칙 CanControl(actor>target)과 UI 를 맞춰 할당 불가 역할 선택 시 permission denied 실패를 방지한다.
-	roles, _ := s.auth.ListRoles(r.Context())
-	controllable := make([]domainauth.Role, 0, len(roles))
-	for _, role := range roles {
-		if int(role.Level) < pd.User.Level {
-			controllable = append(controllable, role)
-		}
-	}
 	memberViews := toMemberViews(members)
-	mv := membersView{Members: memberViews, Roles: toRoleViews(controllable)}
-	// 토큰 쿼터: 전역 기본값 + 이번 일·주·월 멤버별 한도/사용량을 함께 표시한다.
-	if s.quota != nil {
-		if snap, err := s.quota.Snapshot(r.Context()); err == nil {
-			mv.Default = snap.Default
-			mv.Keys = snap.Keys
-			for i := range memberViews {
-				ov := snap.Limits[memberViews[i].ID]
-				use := snap.Usage[memberViews[i].ID]
-				memberViews[i].DailyLimit, memberViews[i].WeeklyLimit, memberViews[i].MonthlyLimit = ov.Daily, ov.Weekly, ov.Monthly
-				memberViews[i].DailyUsed, memberViews[i].WeeklyUsed, memberViews[i].MonthlyUsed = use.Daily, use.Weekly, use.Monthly
-				memberViews[i].Quota = []memberQuotaView{
-					quotaWin("일", ov.Daily, snap.Default.Daily, use.Daily),
-					quotaWin("주", ov.Weekly, snap.Default.Weekly, use.Weekly),
-					quotaWin("월", ov.Monthly, snap.Default.Monthly, use.Monthly),
-				}
-			}
-		}
-	}
-	// 멤버별 최대 세션 수 오버라이드(모달 입력용).
-	if s.sessions != nil {
-		if limits, err := s.sessions.MemberLimits(r.Context()); err == nil {
-			for i := range memberViews {
-				memberViews[i].SessionLimit = limits[memberViews[i].ID]
-			}
-		}
-	}
-	// 멤버별 도구 정책 오버라이드(모달의 도구 리스트 UI). 오버라이드 없는 멤버는 전부 '기본'으로 표시.
-	memberPolicies := map[string]domaintoolpolicy.MemberPolicy{}
-	if s.toolPolicy != nil {
-		memberPolicies = s.toolPolicy.MemberPolicies()
-	}
-	for i := range memberViews {
-		p := memberPolicies[memberViews[i].ID]
-		memberViews[i].ToolEditor = buildToolEditor("m"+memberViews[i].ID, p.Enabled, p.Disabled)
-		memberViews[i].ToolPolicyOverride = len(p.Enabled) > 0 || len(p.Disabled) > 0
-	}
+	mv := membersView{Members: memberViews, Roles: toRoleViews(s.controllableRoles(r, pd.User.Level))}
+
+	// 곁다리 조회(쿼터·세션·도구정책)는 모두 이 페이지에 뿌릴 멤버로 범위를 좁힌다.
+	// 예전에는 화면에 100명만 뿌리면서 각 테이블을 전량 읽어, 보유량이 표시 대상이 아니라
+	// 전체 멤버 수에 비례했다.
+	ids := memberIDs(memberViews)
+	s.fillQuotaColumns(r, &mv, ids)
+	s.fillSessionLimits(r, memberViews, ids)
+	s.fillToolPolicyColumns(memberViews, ids)
+
 	pd.Data = mv
 	s.render(w, "members", pd)
+}
+
+// controllableRoles 는 역할 드롭다운에 노출할 역할만 추린다(actor 보다 낮은 레벨).
+// 인가 규칙 CanControl(actor>target)과 UI 를 맞춰, 할당 불가 역할을 골랐다가
+// permission denied 로 실패하는 일을 막는다.
+func (s *Server) controllableRoles(r *http.Request, actorLevel int) []domainauth.Role {
+	roles, _ := s.auth.ListRoles(r.Context())
+	out := make([]domainauth.Role, 0, len(roles))
+	for _, role := range roles {
+		if int(role.Level) < actorLevel {
+			out = append(out, role)
+		}
+	}
+	return out
+}
+
+// fillQuotaColumns 는 전역 기본값 + 이번 일·주·월 멤버별 한도/사용량을 뷰에 채운다.
+// 조회 실패는 페이지를 막지 않고 쿼터 칸만 비운다(멤버 목록 자체는 계속 보여준다).
+func (s *Server) fillQuotaColumns(r *http.Request, mv *membersView, ids []string) {
+	if s.quota == nil {
+		return
+	}
+	snap, err := s.quota.SnapshotFor(r.Context(), ids)
+	if err != nil {
+		return
+	}
+	mv.Default, mv.Keys = snap.Default, snap.Keys
+	for i := range mv.Members {
+		ov := snap.Limits[mv.Members[i].ID]
+		use := snap.Usage[mv.Members[i].ID]
+		mv.Members[i].DailyLimit, mv.Members[i].WeeklyLimit, mv.Members[i].MonthlyLimit = ov.Daily, ov.Weekly, ov.Monthly
+		mv.Members[i].DailyUsed, mv.Members[i].WeeklyUsed, mv.Members[i].MonthlyUsed = use.Daily, use.Weekly, use.Monthly
+		mv.Members[i].Quota = []memberQuotaView{
+			quotaWin("일", ov.Daily, snap.Default.Daily, use.Daily),
+			quotaWin("주", ov.Weekly, snap.Default.Weekly, use.Weekly),
+			quotaWin("월", ov.Monthly, snap.Default.Monthly, use.Monthly),
+		}
+	}
+}
+
+// fillSessionLimits 는 멤버별 최대 세션 수 오버라이드를 채운다(모달 입력용).
+func (s *Server) fillSessionLimits(r *http.Request, views []memberView, ids []string) {
+	if s.sessions == nil {
+		return
+	}
+	limits, err := s.sessions.MemberLimitsFor(r.Context(), ids)
+	if err != nil {
+		return
+	}
+	for i := range views {
+		views[i].SessionLimit = limits[views[i].ID]
+	}
+}
+
+// fillToolPolicyColumns 는 멤버별 도구 정책 오버라이드를 채운다(모달의 도구 리스트 UI).
+// 오버라이드가 없는 멤버는 전부 '기본'으로 표시된다.
+func (s *Server) fillToolPolicyColumns(views []memberView, ids []string) {
+	policies := map[string]domaintoolpolicy.MemberPolicy{}
+	if s.toolPolicy != nil {
+		// 이 페이지에 뿌릴 id 만 넘긴다 — 전량 스냅샷을 받으면 화면에 없는 멤버까지 복사된다.
+		policies = s.toolPolicy.MemberPoliciesFor(ids)
+	}
+	for i := range views {
+		p := policies[views[i].ID]
+		views[i].ToolEditor = buildToolEditor("m"+views[i].ID, p.Enabled, p.Disabled)
+		views[i].ToolPolicyOverride = len(p.Enabled) > 0 || len(p.Disabled) > 0
+	}
 }
 
 func (s *Server) membersCreate(w http.ResponseWriter, r *http.Request) {
@@ -1163,6 +1189,15 @@ func webErrorMessage(err error) string {
 }
 
 // --- 매핑 ---
+
+// memberIDs 는 화면에 렌더할 멤버들의 id 만 추린다(곁다리 조회를 이 페이지 범위로 좁히는 데 쓴다).
+func memberIDs(vs []memberView) []string {
+	out := make([]string, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, v.ID)
+	}
+	return out
+}
 
 func toMemberViews(ms []domainauth.Member) []memberView {
 	out := make([]memberView, 0, len(ms))

@@ -129,8 +129,9 @@ type Repository interface {
 	// UsageForPeriods 는 member 의 여러 period 사용량을 한 번에 조회한다(없는 period 는 맵에서 생략=0).
 	// 핫패스(일/주/월 동시 시행)에서 윈도우당 개별 조회 대신 단일 왕복으로 줄인다.
 	UsageForPeriods(ctx context.Context, memberID string, periods []string) (map[string]int, error)
-	// UsageByPeriod 는 해당 period 전체 멤버 사용량 맵을 반환한다.
-	UsageByPeriod(ctx context.Context, period string) (map[string]int, error)
+	// UsageByPeriodForMembers 는 해당 period 에서 주어진 멤버들의 사용량만 반환한다.
+	// 어드민 목록처럼 표시 대상이 한 페이지분일 때 결과 크기를 그 범위로 묶는다.
+	UsageByPeriodForMembers(ctx context.Context, period string, memberIDs []string) (map[string]int, error)
 	// ResetUsage 는 멤버의 모든 기간 사용량을 삭제(0으로 초기화)한다.
 	ResetUsage(ctx context.Context, memberID string) error
 
@@ -138,8 +139,8 @@ type Repository interface {
 	MemberLimits(ctx context.Context, memberID string) (Limits, error)
 	// SetMemberLimits 는 멤버별 한도를 upsert 한다(0 = 전역 기본값 사용).
 	SetMemberLimits(ctx context.Context, memberID string, l Limits) error
-	// AllMemberLimits 는 하나라도 0 보다 큰 멤버별 한도 맵을 반환한다.
-	AllMemberLimits(ctx context.Context) (map[string]Limits, error)
+	// MemberLimitsByIDs 는 주어진 멤버들 중 하나라도 0 보다 큰 한도 맵을 반환한다.
+	MemberLimitsByIDs(ctx context.Context, memberIDs []string) (map[string]Limits, error)
 
 	// DefaultLimits 는 전역 기본 일/주/월 한도를 반환한다(0 = 무제한).
 	DefaultLimits(ctx context.Context) (Limits, error)

@@ -38,6 +38,7 @@ import (
 	messagingapp "aiagent/com/ohmyagent/internal/application/messaging"
 	projectapp "aiagent/com/ohmyagent/internal/application/project"
 	quotaapp "aiagent/com/ohmyagent/internal/application/quota"
+	serviceaccountapp "aiagent/com/ohmyagent/internal/application/serviceaccount"
 	sessionapp "aiagent/com/ohmyagent/internal/application/session"
 	toolpolicyapp "aiagent/com/ohmyagent/internal/application/toolpolicy"
 	transcriptapp "aiagent/com/ohmyagent/internal/application/transcript"
@@ -171,12 +172,15 @@ func run() error {
 	// (차단 도구가 실리면 403 — 모델에 스키마 자체를 넘기지 않는다).
 	agentUC := agentapp.NewAgentService(providerUC, toolPolicyManager)
 	sessionUC := chatsessionapp.NewSessionService(sessionRepo)
+	// 서비스 계정 + 장수 API 키: 관리 유스케이스(admin) + oma_sa_ API키 인증기(Secured 라우터에 주입).
+	// authUC 를 accessGate 로 재사용(admin 인가 + owner 실재 검증). 토큰은 SHA-256 해시만 저장(평문 미보관).
+	serviceAccountUC := serviceaccountapp.NewService(dbout.NewServiceAccountRepository(conn), cryptoout.NewSATokenHasher(), authUC)
 
-	// 5) 시딩: super_admin 은 모든 환경에서 항상 보장(없으면 생성). 샘플 Provider 는 비운영만.
+	// 5) 시딩: super_admin 은 모든 환경에서 항상 보장(없으면 생성). 기본 Provider 는 비운영만.
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), seedTimeout)
 	ensureSuperAdmin(seedCtx, log, cfg, memberRepo, hasher)
 	if cfg.SeedsInitialAdmin() {
-		seedSampleProvider(seedCtx, log, providerRepo)
+		seedDefaultProviders(seedCtx, log, providerRepo)
 	}
 	seedCancel()
 
@@ -202,11 +206,12 @@ func run() error {
 		client:           httpin.NewClientHandler(clientVersionManager, toolPolicyManager),
 		memberToolPolicy: httpin.NewMemberToolPolicyHandler(toolPolicyManager),
 		agentReg:         httpin.NewAgentRegistryHandler(registryUC),
+		serviceAccount:   httpin.NewServiceAccountHandler(serviceAccountUC),
 	}
 	webServer := web.NewServer(authUC, providerUC, transcriptManager, quotaService, sessionManager, toolPolicyManager, clientVersionManager, messagingService, registryUC, tokenSvc, cfg.Auth.JWTExpiry.Std(), cfg.Env == "prod")
 
-	// 7) 라우트 등록(설계 §7)
-	router := registerRoutes(tokenSvc, h)
+	// 7) 라우트 등록(설계 §7). serviceAccountUC 를 API키 인증기로 Secured 라우터에 주입한다.
+	router := registerRoutes(tokenSvc, serviceAccountUC, h)
 
 	// 어드민 웹 페이지(htmx + html/template, 쿠키 인증) 마운트: /admin
 	webServer.Register(router.Mux())
@@ -352,24 +357,63 @@ func randomPassword(nBytes int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// seedSampleProvider 는 비운영 환경에서 활성 Provider 가 없으면 샘플(local-ollama)을 생성한다.
-func seedSampleProvider(ctx context.Context, log *slog.Logger, providers domainllmprovider.Repository) {
-	if _, err := providers.GetActive(ctx); errors.Is(err, domainllmprovider.ErrNoActiveProvider) {
-		now := time.Now().UTC().Truncate(time.Second)
-		sample := domainllmprovider.LLMProvider{
-			ID:           uuid.NewString(),
-			Name:         "local-ollama",
-			IsActive:     true,
-			ProviderType: domainllmprovider.ProviderTypeLocal,
-			Config:       domainllmprovider.ProviderConfig{Endpoint: "http://localhost:11434", Model: "llama3"},
-			CreatedAt:    now,
-			UpdatedAt:    now,
+// defaultProviders 는 비운영 환경에서 항상 보장하는 기본 Provider 목록이다.
+// **목록의 첫 항목이 기본 활성 Provider 다**(활성이 하나도 없을 때 적용).
+//
+// API 키는 **환경변수명만** 담는다(APIKeyEnv). 키 원문을 여기에 적으면 시크릿이 git 이력에
+// 영구히 남는다 — 나중에 지워도 이력에는 남으므로 되돌릴 수 없다(TEMPLATE-SPEC §10).
+// 실제 키는 프로세스 환경에 둔다(예: 리포 루트 `.env` — .gitignore 대상).
+var defaultProviders = []domainllmprovider.LLMProvider{
+	{
+		Name:         "openai-gpt-5.6-luna",
+		ProviderType: domainllmprovider.ProviderTypeExternal,
+		Config: domainllmprovider.ProviderConfig{
+			Model:     "gpt-5.6-luna",
+			APIKeyEnv: "OPENAI_API_KEY",
+		},
+	},
+	{
+		Name:         "local-ollama",
+		ProviderType: domainllmprovider.ProviderTypeLocal,
+		Config:       domainllmprovider.ProviderConfig{Endpoint: "http://localhost:11434", Model: "llama3"},
+	},
+}
+
+// seedDefaultProviders 는 기본 Provider 를 **이름 기준으로 없을 때만** 생성한다.
+//
+// 이름 기준 idempotent 이므로 재시작·DB 재생성 후에도 기본값이 되살아나고, 이미 있으면
+// 건드리지 않아 어드민이 바꾼 설정(모델·키·활성 여부)을 덮어쓰지 않는다.
+// 활성 Provider 가 하나도 없을 때만 첫 항목을 활성으로 만든다(활성은 항상 1개).
+func seedDefaultProviders(ctx context.Context, log *slog.Logger, providers domainllmprovider.Repository) {
+	existing, err := providers.List(ctx)
+	if err != nil {
+		log.Error("seed provider: list failed", "error", err)
+		return
+	}
+	byName := make(map[string]struct{}, len(existing))
+	for _, p := range existing {
+		byName[p.Name] = struct{}{}
+	}
+	_, activeErr := providers.GetActive(ctx)
+	needActive := errors.Is(activeErr, domainllmprovider.ErrNoActiveProvider)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, d := range defaultProviders {
+		if _, ok := byName[d.Name]; ok {
+			continue
 		}
-		if err := providers.Save(ctx, sample); err != nil {
-			log.Error("seed provider: save failed", "error", err)
-		} else {
-			log.Info("seed provider created", "name", sample.Name)
+		p := d // 루프 변수 복사(ID/시각을 채워 저장)
+		p.ID = uuid.NewString()
+		p.CreatedAt, p.UpdatedAt = now, now
+		if needActive {
+			p.IsActive = true
+			needActive = false
 		}
+		if err := providers.Save(ctx, p); err != nil {
+			log.Error("seed provider: save failed", "name", p.Name, "error", err)
+			continue
+		}
+		log.Info("seed provider created", "name", p.Name, "model", p.Config.Model, "active", p.IsActive)
 	}
 }
 
@@ -391,12 +435,27 @@ type apiHandlers struct {
 	client           *httpin.ClientHandler
 	memberToolPolicy *httpin.MemberToolPolicyHandler
 	agentReg         *httpin.AgentRegistryHandler
+	serviceAccount   *httpin.ServiceAccountHandler
 }
 
 // registerRoutes 는 API 라우트를 등록한 SecureRouter 를 만든다(설계 §7 — run 의 #7 구획 분리).
-func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.SecureRouter {
-	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc)
+// apiKeyAuth 는 서비스 계정 oma_sa_ API 키 인증기다(Secured 라우터가 접두사로 JWT/API키 경로를 분기).
+func registerRoutes(tokenSvc domainauth.TokenService, apiKeyAuth security.APIKeyAuthenticator, h apiHandlers) *security.SecureRouter {
+	router := security.NewSecureRouter(http.NewServeMux(), tokenSvc, security.WithAPIKeyAuth(apiKeyAuth))
 
+	// 도메인별 등록. ServeMux(Go 1.22+)는 등록 순서가 아니라 패턴 구체성으로 매칭하므로
+	// 그룹 순서는 동작에 영향을 주지 않는다(리터럴 세그먼트가 {와일드카드}보다 항상 우선).
+	registerAuthRoutes(router, h)
+	registerProviderRoutes(router, h)
+	registerAgentClientRoutes(router, h)
+	registerMessagingRoutes(router, h)
+	registerAgentRegistryRoutes(router, h)
+	registerServiceAccountRoutes(router, h)
+	return router
+}
+
+// registerAuthRoutes 는 로그인·본인 정보·멤버 관리·대시보드 집계를 등록한다(평면 envelope).
+func registerAuthRoutes(router *security.SecureRouter, h apiHandlers) {
 	router.Public("POST /api/v1/auth/login", httpin.Handle(h.auth.Login))
 
 	// 본인 정보·비밀번호·역할목록(인증된 사용자)
@@ -416,6 +475,12 @@ func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.S
 	router.Secured("GET /api/v1/members/{id}/tool-policy", httpin.Handle(h.memberToolPolicy.Get), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("PUT /api/v1/members/{id}/tool-policy", httpin.Handle(h.memberToolPolicy.Put), security.MinRole(domainauth.RoleLevelAdmin))
 
+	// 대시보드 집계(admin↑)
+	router.Secured("GET /api/v1/statistics", httpin.Handle(h.stats.Get), security.MinRole(domainauth.RoleLevelAdmin))
+}
+
+// registerProviderRoutes 는 LLM Provider 관리와 질의(SSE)를 등록한다(평면 envelope).
+func registerProviderRoutes(router *security.SecureRouter, h apiHandlers) {
 	router.Secured("GET /api/v1/llm-providers", httpin.Handle(h.provider.List), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/llm-providers/{id}", httpin.Handle(h.provider.Get), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/llm-providers", httpin.Handle(h.provider.Create), security.MinRole(domainauth.RoleLevelAdmin))
@@ -424,14 +489,13 @@ func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.S
 	router.Secured("DELETE /api/v1/llm-providers/{id}", httpin.Handle(h.provider.Delete), security.MinRole(domainauth.RoleLevelAdmin))
 	router.Secured("POST /api/v1/llm-providers/{id}/test", httpin.Handle(h.provider.Test), security.MinRole(domainauth.RoleLevelAdmin))
 
-	// 대시보드 집계(admin↑)
-	router.Secured("GET /api/v1/statistics", httpin.Handle(h.stats.Get), security.MinRole(domainauth.RoleLevelAdmin))
-
 	// 질의(클라이언트 → 활성 LLM → SSE 응답). 인증된 사용자(user↑) 누구나.
 	router.Secured("POST /api/v1/chat", httpin.Handle(h.chat.Stream), security.MinRole(domainauth.RoleLevelUser))
+}
 
-	// --- C# 에이전트 클라이언트 계약(API_CONTRACT) ---
-	// 에러 envelope 은 클라이언트 계약대로 { "error": { code, message } } (HandleAgent).
+// registerAgentClientRoutes 는 C# 에이전트 클라이언트 계약(API_CONTRACT)을 등록한다.
+// 에러 envelope 은 클라이언트 계약대로 { "error": { code, message } } (HandleAgent).
+func registerAgentClientRoutes(router *security.SecureRouter, h apiHandlers) {
 	router.Public("GET /api/v1/health", httpin.HandleAgent(h.health.Check)) // 헬스/연결 체크(인증 불필요)
 
 	router.Secured("GET /api/v1/models", httpin.HandleAgent(h.models.List), security.MinRole(domainauth.RoleLevelUser))
@@ -460,8 +524,11 @@ func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.S
 	router.Secured("DELETE /api/v1/projects/{id}", httpin.HandleAgent(h.project.Delete), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/projects/{id}/conversations", httpin.HandleAgent(h.project.UpsertConversation), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("DELETE /api/v1/projects/{id}/conversations/{cid}", httpin.HandleAgent(h.project.DeleteConversation), security.MinRole(domainauth.RoleLevelUser))
+}
 
-	// 사용자 간 실시간 채팅(단체/1:1). WS 는 Bearer 헤더로 인증. REST 는 방/이력 관리.
+// registerMessagingRoutes 는 사용자 간 실시간 채팅(단체/1:1)을 등록한다.
+// WS 는 Bearer 헤더로 인증. REST 는 방/이력/첨부 관리(중첩 envelope).
+func registerMessagingRoutes(router *security.SecureRouter, h apiHandlers) {
 	router.Secured("GET /api/v1/chat/ws", httpin.HandleAgent(h.chatWS.Serve), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/chat/rooms", httpin.HandleAgent(h.messaging.ListRooms), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/chat/rooms", httpin.HandleAgent(h.messaging.CreateGroup), security.MinRole(domainauth.RoleLevelUser))
@@ -481,9 +548,12 @@ func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.S
 	router.Secured("GET /api/v1/chat/mentions", httpin.HandleAgent(h.messaging.Mentions), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/chat/attachments", httpin.HandleAgent(h.messaging.UploadAttachment), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/chat/attachments/{aid}", httpin.HandleAgent(h.messaging.DownloadAttachment), security.MinRole(domainauth.RoleLevelUser))
+}
 
-	// 에이전트 레지스트리(§공유 계약): 등록·heartbeat·해제·발견 + A2A 토큰 브로커.
-	// 주의: 리터럴 a2a-public-key 가 {id} 보다 우선 매칭된다(Go 1.22+ ServeMux 구체 경로 우선).
+// registerAgentRegistryRoutes 는 에이전트 레지스트리(§공유 계약)를 등록한다:
+// 등록·heartbeat·해제·발견 + A2A 토큰 브로커(평면 envelope).
+// 주의: 리터럴 a2a-public-key 가 {id} 보다 우선 매칭된다(Go 1.22+ ServeMux 구체 경로 우선).
+func registerAgentRegistryRoutes(router *security.SecureRouter, h apiHandlers) {
 	router.Secured("POST /api/v1/agents/register", httpin.Handle(h.agentReg.Register), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/agents/{id}/heartbeat", httpin.Handle(h.agentReg.Heartbeat), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("DELETE /api/v1/agents/{id}", httpin.Handle(h.agentReg.Deregister), security.MinRole(domainauth.RoleLevelUser))
@@ -491,5 +561,16 @@ func registerRoutes(tokenSvc domainauth.TokenService, h apiHandlers) *security.S
 	router.Secured("GET /api/v1/agents/{id}", httpin.Handle(h.agentReg.Get), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("POST /api/v1/agents/{id}/token", httpin.Handle(h.agentReg.MintToken), security.MinRole(domainauth.RoleLevelUser))
 	router.Secured("GET /api/v1/agents/a2a-public-key", httpin.Handle(h.agentReg.PublicKey), security.MinRole(domainauth.RoleLevelUser))
-	return router
+}
+
+// registerServiceAccountRoutes 는 서비스 계정 + 장수 API 키 관리를 등록한다
+// (스펙 §2D — 전부 admin 전용, 유스케이스 RequireAdmin 이중 게이트).
+// 리터럴 keys 세그먼트가 {id} 와일드카드보다 우선 매칭된다(Go 1.22+ ServeMux).
+func registerServiceAccountRoutes(router *security.SecureRouter, h apiHandlers) {
+	router.Secured("POST /api/v1/service-accounts", httpin.Handle(h.serviceAccount.Create), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/service-accounts", httpin.Handle(h.serviceAccount.List), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("DELETE /api/v1/service-accounts/{id}", httpin.Handle(h.serviceAccount.Delete), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("POST /api/v1/service-accounts/{id}/keys", httpin.Handle(h.serviceAccount.IssueKey), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("GET /api/v1/service-accounts/{id}/keys", httpin.Handle(h.serviceAccount.ListKeys), security.MinRole(domainauth.RoleLevelAdmin))
+	router.Secured("DELETE /api/v1/service-accounts/{id}/keys/{key_id}", httpin.Handle(h.serviceAccount.RevokeKey), security.MinRole(domainauth.RoleLevelAdmin))
 }

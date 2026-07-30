@@ -31,6 +31,23 @@ func strFromNull(ns sql.NullString) string {
 	return ""
 }
 
+// inPlaceholders 는 IN 절용 `?,?,?` 문자열과 (선행 인자 + ids) 인자 목록을 만든다.
+//
+// `WHERE member_id=? AND period IN (...)` 처럼 IN 앞에 다른 조건이 오는 질의를 위해
+// lead 로 선행 인자를 받는다. 인자 순서는 lead → ids 이므로 SQL 의 ? 순서와 맞춰 쓴다.
+// ids 가 비면 빈 문자열을 돌려주므로, 호출부가 먼저 빈 목록을 걸러야 한다
+// (`IN ()` 은 유효한 SQL 이 아니다).
+func inPlaceholders(ids []string, lead ...any) (string, []any) {
+	ph := make([]string, len(ids))
+	args := make([]any, 0, len(lead)+len(ids))
+	args = append(args, lead...)
+	for i, id := range ids {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	return strings.Join(ph, ","), args
+}
+
 // affectedOrNotFound 는 UPDATE/DELETE 결과의 0행 영향을 도메인 notFound 에러로 변환한다.
 func affectedOrNotFound(res sql.Result, notFound error) error {
 	n, err := res.RowsAffected()
@@ -92,18 +109,6 @@ func queryOne[T any](ctx context.Context, db *sql.DB, what string, notFound erro
 		return zero, fmt.Errorf("%s: %w", what, err)
 	}
 	return v, nil
-}
-
-// inPlaceholders 는 IN 절용 플레이스홀더 목록("?,?,?")과 대응 인자 슬라이스를 만든다.
-// 값 개수가 가변인 IN 조회에서 자리표시자 수와 인자 수가 어긋나는 실수를 한곳에 가둔다.
-func inPlaceholders[T any](vals []T) (string, []any) {
-	ph := make([]string, len(vals))
-	args := make([]any, len(vals))
-	for i, v := range vals {
-		ph[i] = "?"
-		args[i] = v
-	}
-	return strings.Join(ph, ","), args
 }
 
 // encodeJSONList 는 슬라이스를 JSON 텍스트 컬럼 값으로 직렬화한다(빈 슬라이스·실패는 빈 문자열).

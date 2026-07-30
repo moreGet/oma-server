@@ -80,6 +80,17 @@ func (r *fakeMemberRepo) List(ctx context.Context, filter domainauth.MemberFilte
 	return r.listResult, r.listTotal, nil
 }
 
+func (r *fakeMemberRepo) CountByRole(ctx context.Context) (map[int]int, int, error) {
+	if r.listErr != nil {
+		return nil, 0, r.listErr
+	}
+	out := make(map[int]int)
+	for _, m := range r.listResult {
+		out[m.Role.ID]++
+	}
+	return out, r.listTotal, nil
+}
+
 func (r *fakeMemberRepo) Delete(ctx context.Context, id string) error {
 	r.deleted = append(r.deleted, id)
 	return nil

@@ -50,10 +50,10 @@ func TestQuotaRepository(t *testing.T) {
 	ml, _ = repo.MemberLimits(ctx, "m1")
 	assert.Equal(t, domainquota.Limits{Daily: 7, Monthly: 700}, ml)
 
-	// 스냅샷 맵.
-	usageMap, _ := repo.UsageByPeriod(ctx, "2026-06-27")
+	// 스냅샷 맵(어드민 목록 한 페이지분 — 표시 대상 id 로 범위를 좁혀 조회).
+	usageMap, _ := repo.UsageByPeriodForMembers(ctx, "2026-06-27", []string{"m1"})
 	assert.Equal(t, 150, usageMap["m1"])
-	limitsMap, _ := repo.AllMemberLimits(ctx)
+	limitsMap, _ := repo.MemberLimitsByIDs(ctx, []string{"m1"})
 	assert.Equal(t, domainquota.Limits{Daily: 7, Monthly: 700}, limitsMap["m1"])
 
 	// UsageForPeriods: 여러 기간을 단일 쿼리로 — 존재하는 기간만 맵에 담기고 없는 기간은 생략(=0).

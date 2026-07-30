@@ -33,6 +33,11 @@ type fakeAuthService struct {
 
 	rolesResult []domainauth.Role
 
+	// 역할별 집계(GET /api/v1/statistics). 미설정이면 getMember 기준 1건으로 파생한다.
+	counts      map[int]int
+	countsTotal int
+	countsErr   error
+
 	lastActorID string
 }
 
@@ -48,6 +53,17 @@ func (s *fakeAuthService) Login(ctx context.Context, cmd domainauth.LoginCommand
 func (s *fakeAuthService) ListMembers(ctx context.Context, actorID string, filter domainauth.MemberFilter) ([]domainauth.Member, int, error) {
 	s.lastActorID = actorID
 	return []domainauth.Member{s.getMember}, 1, nil
+}
+
+func (s *fakeAuthService) CountMembersByRole(ctx context.Context, actorID string) (map[int]int, int, error) {
+	s.lastActorID = actorID
+	if s.countsErr != nil {
+		return nil, 0, s.countsErr
+	}
+	if s.counts != nil {
+		return s.counts, s.countsTotal, nil
+	}
+	return map[int]int{s.getMember.Role.ID: 1}, 1, nil
 }
 
 func (s *fakeAuthService) GetMember(ctx context.Context, actorID, targetID string) (domainauth.Member, error) {

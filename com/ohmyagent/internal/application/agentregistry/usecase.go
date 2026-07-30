@@ -138,7 +138,10 @@ func (s *Service) Discover(ctx context.Context, f domainagentregistry.Filter) ([
 		return nil, err
 	}
 	now := s.now().UTC()
-	out := make([]domainagentregistry.Agent, 0, len(rows))
+	// rows 의 배열을 재사용해 제자리에서 걸러낸다(AdminList 와 같은 방식).
+	// 별도 out 슬라이스를 len(rows) 로 미리 잡으면 같은 데이터가 두 벌 동시에 살아 있게 된다 —
+	// 레포가 방금 할당한 배열이라 다른 곳에서 참조하지 않으므로 덮어써도 안전하다.
+	out := rows[:0]
 	for _, a := range rows {
 		if !a.Matches(f) { // 레포 SQL 은 코스 필터 — 최종 판정은 도메인 로직
 			continue

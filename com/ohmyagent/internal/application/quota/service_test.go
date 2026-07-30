@@ -37,11 +37,11 @@ func (r *fakeRepo) UsageForPeriods(_ context.Context, m string, periods []string
 	}
 	return out, nil
 }
-func (r *fakeRepo) UsageByPeriod(_ context.Context, p string) (map[string]int, error) {
-	out := map[string]int{}
-	for k, v := range r.usage {
-		if i := strings.LastIndex(k, "|"); i >= 0 && k[i+1:] == p {
-			out[k[:i]] = v
+func (r *fakeRepo) UsageByPeriodForMembers(_ context.Context, p string, ids []string) (map[string]int, error) {
+	out := make(map[string]int, len(ids))
+	for _, id := range ids {
+		if v, ok := r.usage[uk(id, p)]; ok {
+			out[id] = v
 		}
 	}
 	return out, nil
@@ -61,8 +61,14 @@ func (r *fakeRepo) SetMemberLimits(_ context.Context, m string, l domainquota.Li
 	r.mlimit[m] = l
 	return nil
 }
-func (r *fakeRepo) AllMemberLimits(context.Context) (map[string]domainquota.Limits, error) {
-	return r.mlimit, nil
+func (r *fakeRepo) MemberLimitsByIDs(_ context.Context, ids []string) (map[string]domainquota.Limits, error) {
+	out := make(map[string]domainquota.Limits, len(ids))
+	for _, id := range ids {
+		if l, ok := r.mlimit[id]; ok {
+			out[id] = l
+		}
+	}
+	return out, nil
 }
 func (r *fakeRepo) DefaultLimits(context.Context) (domainquota.Limits, error) { return r.def, nil }
 func (r *fakeRepo) SetDefaultLimits(_ context.Context, l domainquota.Limits) error {
@@ -138,7 +144,7 @@ func TestService_SnapshotAndAdminOps(t *testing.T) {
 	require.NoError(t, s.SetMemberLimits(ctx, "admin", "u1", domainquota.Limits{Monthly: 5}))
 	s.Add(ctx, "u1", 3) // 일/주/월 각각 3
 
-	snap, err := s.Snapshot(ctx)
+	snap, err := s.SnapshotFor(ctx, []string{"u1"})
 	require.NoError(t, err)
 	assert.Equal(t, domainquota.Limits{Daily: 10, Weekly: 20, Monthly: 30}, snap.Default)
 	assert.Equal(t, 5, snap.Limits["u1"].Monthly)
@@ -148,7 +154,7 @@ func TestService_SnapshotAndAdminOps(t *testing.T) {
 
 	// 사용량 초기화 → Snapshot 사용량 0.
 	require.NoError(t, s.ResetUsage(ctx, "admin", "u1"))
-	snap2, err := s.Snapshot(ctx)
+	snap2, err := s.SnapshotFor(ctx, []string{"u1"})
 	require.NoError(t, err)
 	assert.Equal(t, 0, snap2.Usage["u1"].Monthly)
 }

@@ -81,5 +81,5 @@ type SettingsRepository interface {
 type MemberLimitRepository interface {
 	Get(ctx context.Context, memberID string) (int, error)
 	Set(ctx context.Context, memberID string, max int) error
-	All(ctx context.Context) (map[string]int, error)
+	ByIDs(ctx context.Context, memberIDs []string) (map[string]int, error) // 주어진 멤버만(오버라이드 없으면 생략)
 }

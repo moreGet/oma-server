@@ -25,7 +25,15 @@ func (r *fakeLimits) Set(_ context.Context, id string, max int) error {
 	r.m[id] = max
 	return nil
 }
-func (r *fakeLimits) All(context.Context) (map[string]int, error) { return r.m, nil }
+func (r *fakeLimits) ByIDs(_ context.Context, ids []string) (map[string]int, error) {
+	out := make(map[string]int, len(ids))
+	for _, id := range ids {
+		if v, ok := r.m[id]; ok {
+			out[id] = v
+		}
+	}
+	return out, nil
+}
 
 type fakeStore struct{}
 

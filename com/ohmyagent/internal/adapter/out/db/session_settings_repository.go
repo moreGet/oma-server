@@ -99,9 +99,15 @@ func (r *MemberSessionLimitRepository) Set(ctx context.Context, memberID string,
 	return nil
 }
 
-func (r *MemberSessionLimitRepository) All(ctx context.Context) (map[string]int, error) {
-	out := make(map[string]int)
-	err := queryEach(ctx, r.db, "session limit: all", func(sc rowScanner) error {
+// ByIDs 는 주어진 멤버들의 오버라이드만 조회한다(어드민 목록이 한 페이지분만 필요할 때).
+// 결과 크기가 테이블 전체가 아니라 요청한 id 수에 묶인다.
+func (r *MemberSessionLimitRepository) ByIDs(ctx context.Context, memberIDs []string) (map[string]int, error) {
+	out := make(map[string]int, len(memberIDs))
+	if len(memberIDs) == 0 {
+		return out, nil
+	}
+	ph, args := inPlaceholders(memberIDs)
+	err := queryEach(ctx, r.db, "session limit: by ids", func(sc rowScanner) error {
 		var id string
 		var m int
 		if err := sc.Scan(&id, &m); err != nil {
@@ -109,7 +115,7 @@ func (r *MemberSessionLimitRepository) All(ctx context.Context) (map[string]int,
 		}
 		out[id] = m
 		return nil
-	}, "SELECT member_id, max_sessions FROM member_session_limits WHERE max_sessions > 0")
+	}, "SELECT member_id, max_sessions FROM member_session_limits WHERE max_sessions > 0 AND member_id IN ("+ph+")", args...)
 	if err != nil {
 		return nil, err
 	}

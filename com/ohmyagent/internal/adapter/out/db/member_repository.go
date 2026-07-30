@@ -107,9 +107,50 @@ func (r *MemberRepository) List(ctx context.Context, filter domainauth.MemberFil
 		listArgs = append(listArgs, filter.Limit, filter.Offset)
 	}
 
-	out, err := queryList(ctx, r.db, "list members", scanMember, query, listArgs...)
+	// total 을 이미 알고 있으므로 정확한 용량으로 한 번에 잡는다(append 재할당·복사 제거).
+	// LIMIT 이 걸린 경우엔 그쪽이 상한이다.
+	capacity := total
+	if filter.Limit > 0 && filter.Limit < capacity {
+		capacity = filter.Limit
+	}
+	out := make([]domainauth.Member, 0, capacity)
+	err := queryEach(ctx, r.db, "list members", func(sc rowScanner) error {
+		m, scanErr := scanMember(sc)
+		if scanErr != nil {
+			return scanErr
+		}
+		out = append(out, m)
+		return nil
+	}, query, listArgs...)
 	if err != nil {
 		return nil, 0, err
+	}
+	return out, total, nil
+}
+
+// CountByRole 은 역할별 인원과 전체 인원을 집계한다(멤버 행을 힙에 올리지 않는다).
+//
+// 대시보드가 역할별 카운트만 필요할 때 List 로 전량을 적재하지 않게 하려는 메서드다 —
+// GROUP BY 한 번이면 결과 크기가 멤버 수가 아니라 **역할 수**에 묶인다.
+func (r *MemberRepository) CountByRole(ctx context.Context) (map[int]int, int, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT role_id, COUNT(*) FROM members GROUP BY role_id")
+	if err != nil {
+		return nil, 0, fmt.Errorf("count members by role: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[int]int)
+	total := 0
+	for rows.Next() {
+		var roleID, n int
+		if err := rows.Scan(&roleID, &n); err != nil {
+			return nil, 0, fmt.Errorf("scan member role count: %w", err)
+		}
+		out[roleID] = n
+		total += n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate member role counts: %w", err)
 	}
 	return out, total, nil
 }

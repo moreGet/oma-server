@@ -55,8 +55,7 @@ func (r *QuotaRepository) UsageForPeriods(ctx context.Context, memberID string, 
 	if len(periods) == 0 {
 		return out, nil
 	}
-	ph, periodArgs := inPlaceholders(periods)
-	args := append([]any{memberID}, periodArgs...)
+	ph, args := inPlaceholders(periods, memberID)
 	err := queryEach(ctx, r.db, "quota: usage for periods", func(sc rowScanner) error {
 		var p string
 		var v int
@@ -72,9 +71,13 @@ func (r *QuotaRepository) UsageForPeriods(ctx context.Context, memberID string, 
 	return out, nil
 }
 
-// UsageByPeriod 는 해당 기간 전체 멤버 사용량 맵을 반환한다.
-func (r *QuotaRepository) UsageByPeriod(ctx context.Context, period string) (map[string]int, error) {
-	return r.scanMap(ctx, "SELECT member_id, used_tokens FROM token_usage WHERE period=?", period)
+// UsageByPeriodForMembers 는 해당 기간에서 주어진 멤버들의 사용량만 반환한다.
+func (r *QuotaRepository) UsageByPeriodForMembers(ctx context.Context, period string, memberIDs []string) (map[string]int, error) {
+	if len(memberIDs) == 0 {
+		return map[string]int{}, nil
+	}
+	ph, args := inPlaceholders(memberIDs, period)
+	return r.scanMap(ctx, "SELECT member_id, used_tokens FROM token_usage WHERE period=? AND member_id IN ("+ph+")", args...)
 }
 
 // ResetUsage 는 멤버의 모든 기간 사용량 행을 삭제한다(0으로 초기화).
@@ -113,10 +116,14 @@ func (r *QuotaRepository) SetMemberLimits(ctx context.Context, memberID string, 
 	return nil
 }
 
-// AllMemberLimits 는 하나라도 0 보다 큰 멤버별 한도 맵을 반환한다.
-func (r *QuotaRepository) AllMemberLimits(ctx context.Context) (map[string]domainquota.Limits, error) {
-	out := make(map[string]domainquota.Limits)
-	err := queryEach(ctx, r.db, "quota: all member limits", func(sc rowScanner) error {
+// MemberLimitsByIDs 는 주어진 멤버들 중 한도가 설정된(하나라도 0 초과) 행만 반환한다.
+func (r *QuotaRepository) MemberLimitsByIDs(ctx context.Context, memberIDs []string) (map[string]domainquota.Limits, error) {
+	out := make(map[string]domainquota.Limits, len(memberIDs))
+	if len(memberIDs) == 0 {
+		return out, nil
+	}
+	ph, args := inPlaceholders(memberIDs)
+	err := queryEach(ctx, r.db, "quota: member limits by ids", func(sc rowScanner) error {
 		var id string
 		var l domainquota.Limits
 		if err := sc.Scan(&id, &l.Daily, &l.Weekly, &l.Monthly); err != nil {
@@ -124,7 +131,8 @@ func (r *QuotaRepository) AllMemberLimits(ctx context.Context) (map[string]domai
 		}
 		out[id] = l
 		return nil
-	}, "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits WHERE daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0")
+	}, "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits"+
+		" WHERE (daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0) AND member_id IN ("+ph+")", args...)
 	if err != nil {
 		return nil, err
 	}

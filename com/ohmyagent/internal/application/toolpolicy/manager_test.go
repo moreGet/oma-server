@@ -152,5 +152,5 @@ func TestManager_MemberPolicyLayeredMerge(t *testing.T) {
 	}))
 	_, _, d3 := m.EffectivePolicy("u1")
 	assert.Equal(t, []string{"kill_process"}, d3)
-	assert.Empty(t, m.MemberPolicies())
+	assert.Empty(t, m.MemberPoliciesFor([]string{"u1", "u2"}))
 }

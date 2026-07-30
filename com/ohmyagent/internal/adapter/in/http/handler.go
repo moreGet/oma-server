@@ -27,6 +27,18 @@ const (
 	CodeTooManyRequests  = "TOO_MANY_REQUESTS"
 	CodeBadGateway       = "BAD_GATEWAY"
 	CodeInternal         = "INTERNAL_ERROR"
+	// 요청 본문 압축 수용에서 쓰는 코드(클라이언트 압축 스펙 §1).
+	CodePayloadTooLarge      = "PAYLOAD_TOO_LARGE"      // 413 — 해제 후 크기 상한 초과(zip bomb 방어)
+	CodeUnsupportedMediaType = "UNSUPPORTED_MEDIA_TYPE" // 415 — 지원하지 않는 Content-Encoding
+)
+
+// agent 계열 라우트(HandleAgent)의 중첩 envelope 에 쓰는 소문자 코드.
+// 상태코드만으로는 구분되지 않는(400 이 bad_request 와 malformed_body 로 갈리는) 경우가 있어
+// AppError 에 명시 코드를 실어 보낸다.
+const (
+	agentCodeUnsupportedEncoding = "unsupported_encoding"
+	agentCodeMalformedBody       = "malformed_body"
+	agentCodePayloadTooLarge     = "payload_too_large"
 )
 
 // 페이지네이션 기본값(스펙 §5.4): 기본 limit=20, 상한 100.
@@ -45,9 +57,23 @@ const (
 
 // decodeJSON 은 요청 본문을 maxBytes 로 제한해 JSON 디코딩한다.
 // 상한 초과/형식 오류는 400(BAD_REQUEST)으로 매핑한다(MaxBytesReader 가 과대 본문을 조기 차단).
+//
+// Content-Encoding: gzip 이면 스트리밍으로 해제한다(compression.go). maxBytes 는 압축 전과
+// 해제 후 양쪽에 걸리므로 zip bomb 으로 힙을 부풀릴 수 없다. 헤더가 없으면 종전과 동일하다.
 func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+	body, err := requestBodyReader(w, r, maxBytes)
+	if err != nil {
+		if ae := bodyReadErrToHTTP(err); ae != nil {
+			return ae // 400 — gzip 헤더가 깨졌다
+		}
+		return err // 415 — 지원하지 않는 인코딩(이미 AppError)
+	}
+	defer func() { _ = body.Close() }()
+
+	if err := json.NewDecoder(body).Decode(dst); err != nil {
+		if ae := bodyReadErrToHTTP(err); ae != nil {
+			return ae // 413(해제 상한 초과) / 400(깨진 압축 본문)
+		}
 		return ErrBadRequest("invalid request body")
 	}
 	return nil
@@ -114,7 +140,12 @@ type agentErrorDetail struct {
 }
 
 // agentCode 는 AppError 의 HTTP 상태를 클라이언트 계약의 소문자 코드로 매핑한다.
+// 명시 코드(WithAgentCode)가 실려 있으면 그것을 우선한다 — 같은 400 이라도
+// bad_request 와 malformed_body 는 클라이언트가 구분해야 하기 때문이다.
 func agentCode(ae *AppError) string {
+	if ae.agentCodeOverride != "" {
+		return ae.agentCodeOverride
+	}
 	switch ae.HTTPStatus() {
 	case http.StatusBadRequest:
 		return "bad_request"
@@ -159,6 +190,10 @@ type AppError struct {
 	// Error() 를 통해 서버 로그에만 남는다. 업스트림 실패(502 등)를 조사하려면
 	// 클라이언트에 노출할 수 없는 상세(벤더 응답·엔드포인트)가 로그에 필요하다.
 	cause error
+	// agentCodeOverride 는 HandleAgent 의 중첩 envelope 에서 쓸 소문자 코드다.
+	// 비어 있으면 agentCode() 가 HTTP 상태에서 유도한다. json 태그가 없어 flat envelope
+	// 응답에는 영향을 주지 않는다(관리자 API 는 종전대로 대문자 Code 만 나간다).
+	agentCodeOverride string
 }
 
 // WithCause 는 원인 에러를 매단 사본을 반환한다(로그 전용, 클라이언트 응답에는 노출되지 않는다).
@@ -166,7 +201,15 @@ func (e *AppError) WithCause(err error) *AppError {
 	if e == nil || err == nil {
 		return e
 	}
-	return &AppError{Code: e.Code, Message: e.Message, cause: err}
+	return &AppError{Code: e.Code, Message: e.Message, cause: err, agentCodeOverride: e.agentCodeOverride}
+}
+
+// WithAgentCode 는 agent 계열 envelope 에서 쓸 소문자 코드를 매단 사본을 반환한다.
+func (e *AppError) WithAgentCode(code string) *AppError {
+	if e == nil || code == "" {
+		return e
+	}
+	return &AppError{Code: e.Code, Message: e.Message, cause: e.cause, agentCodeOverride: code}
 }
 
 func (e *AppError) Error() string {
@@ -193,6 +236,10 @@ func (e *AppError) HTTPStatus() int {
 		return http.StatusConflict
 	case CodeTooManyRequests:
 		return http.StatusTooManyRequests
+	case CodePayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
+	case CodeUnsupportedMediaType:
+		return http.StatusUnsupportedMediaType
 	case CodeBadGateway:
 		return http.StatusBadGateway
 	default:
@@ -211,6 +258,12 @@ func ErrTooManyRequests(msg string) *AppError {
 	return &AppError{Code: CodeTooManyRequests, Message: msg}
 }
 func ErrBadGateway(msg string) *AppError { return &AppError{Code: CodeBadGateway, Message: msg} }
+func ErrPayloadTooLarge(msg string) *AppError {
+	return &AppError{Code: CodePayloadTooLarge, Message: msg}
+}
+func ErrUnsupportedMediaType(msg string) *AppError {
+	return &AppError{Code: CodeUnsupportedMediaType, Message: msg}
+}
 
 // toAppError 는 임의 에러를 AppError 로 변환한다. AppError 가 아니면 500 으로 폴백한다.
 func toAppError(err error) *AppError {

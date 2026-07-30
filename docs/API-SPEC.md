@@ -3,9 +3,9 @@
 OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽스. 인증은 JWT Bearer.
 
 **에러 envelope (두 종류)**
-- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`, **에이전트 레지스트리 `/agents*`**): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | BAD_GATEWAY | INTERNAL_ERROR`
-- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**, **`/chat/rooms*`**·**`/chat/ws`**): `{ "error": { "code": "bad_request", "message": "..." } }`
-  소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error`
+- **평면**(auth/members/roles/llm-providers/statistics/chat, `/me`·`/me/quota`·`/me/password`, **에이전트 레지스트리 `/agents*`**, **서비스 계정 `/service-accounts*`**): `{ "code": "BAD_REQUEST", "message": "..." }` (스펙 §5.2). 코드: `BAD_REQUEST | UNAUTHORIZED | FORBIDDEN | NOT_FOUND | CONFLICT | TOO_MANY_REQUESTS | PAYLOAD_TOO_LARGE | UNSUPPORTED_MEDIA_TYPE | BAD_GATEWAY | INTERNAL_ERROR`
+- **중첩**(클라이언트 계약: health/models/agent/*, **`/users/me`**, **`/projects/*`**, **`/tools/*`**, **`/client/version`**, **`/security/command-policy`**, **`/chat/rooms*`**·**`/chat/attachments*`**·**`/chat/mentions`**·**`/chat/unread`**·**`/chat/ws`**): `{ "error": { "code": "bad_request", "message": "..." } }`
+  소문자 코드: `bad_request | unauthorized | forbidden | not_found | rate_limited | backend_error | malformed_body | payload_too_large | unsupported_encoding`
 
 ---
 
@@ -21,11 +21,39 @@ OhMyAgent AI Agent 서버 HTTP API 명세. 모든 경로는 `/api/v1` 프리픽�
 | **404** | `NOT_FOUND` | `not_found` | 리소스 없음 | 멤버/Provider/프로젝트/대화 없음, **활성 LLM Provider 없음**(`no active llm provider`), 미구현 선택 엔드포인트 |
 | **405** | `METHOD_NOT_ALLOWED` | `backend_error` | 미허용 메서드 | 라우터에 없는 메서드 |
 | **409** | `CONFLICT` | `backend_error` | 충돌 | 중복(예: username 중복 생성) |
+| **413** | `PAYLOAD_TOO_LARGE` | `payload_too_large` | 본문 과대 | **gzip 해제 후** 크기가 라우트 상한을 초과(zip bomb 방어). 압축 없는 과대 본문은 종전대로 400 |
+| **415** | `UNSUPPORTED_MEDIA_TYPE` | `unsupported_encoding` | 미지원 인코딩 | `Content-Encoding` 이 `gzip`/`identity` 가 아님. multipart 엔드포인트에 압축 본문을 보낸 경우 포함 |
 | **429** | `TOO_MANY_REQUESTS` | `rate_limited` | 한도 초과 | **토큰 쿼터(일/주/월) 초과** 또는 **세션 저장 캡 초과**. 인증과 무관 |
 | **500** | `INTERNAL_ERROR` | `backend_error` | 서버 오류 | 미처리 예외/패닉(복구되어 500 반환) |
 | **502** | `BAD_GATEWAY` | `backend_error` | 업스트림 오류 | LLM 호출 실패, 어댑터가 채팅 미지원(예: 잘못된 설정) |
 
 > 중첩 envelope 매핑은 **HTTP 상태 기준**이다: 400→`bad_request`, 401→`unauthorized`, 403→`forbidden`, 404→`not_found`, 429→`rate_limited`, **그 외(405/409/500/502)→`backend_error`**.
+> 예외: 압축 관련 오류는 상태만으로 구분되지 않아 명시 코드를 쓴다 — 413→`payload_too_large`, 415→`unsupported_encoding`, 그리고 **깨진 압축 본문은 400 이지만 `malformed_body`**(일반 JSON 문법 오류인 `bad_request` 와 구분).
+
+## 요청 본문 압축 (`Content-Encoding: gzip`)
+
+큰 요청을 보낼 때 본문을 gzip 으로 압축해 보낼 수 있다. **선택 사항이며 하위 호환된다** — 헤더를 붙이지 않으면 종전과 완전히 동일하게 동작한다.
+
+에이전트는 도구를 호출할 때마다 대화 전문을 다시 보내고 그 이력에 소스 원문이 들어 있어 압축이 특히 잘 듣는다(클라이언트 실측 76~80% 감소).
+
+```http
+POST /api/v1/agent/chat HTTP/1.1
+Content-Type: application/json
+Content-Encoding: gzip
+Authorization: Bearer <JWT>
+
+<gzip 압축된 JSON 바이트>
+```
+
+| 항목 | 동작 |
+|---|---|
+| 지원 인코딩 | `gzip` 만. `deflate`/`br` 은 미지원 → 415 |
+| 적용 범위 | **모든 JSON 엔드포인트**(본문 디코더 단일 경로). multipart(첨부 업로드)는 미지원 → 415 |
+| 헤더 부재 / `identity` | 평문 처리(하위 호환) |
+| 크기 상한 | 라우트별 상한이 **압축 전·해제 후 양쪽**에 적용(일반 1 MiB, agent/chat·세션·대화 push 32 MiB) |
+| 해제 방식 | 스트리밍 해제 + 누적 바이트 상한(zip bomb 방어 — 전량 버퍼링 없음) |
+
+**응답 압축**은 리버스 프록시(nginx) 담당이며 `application/json` 에만 적용된다. **SSE(`text/event-stream`)는 압축·버퍼링에서 제외**한다 — gzip 을 걸면 토큰이 실시간으로 흐르지 않고 뭉텅이로 늦게 도착한다. 설정은 `cicd/nginx.conf` 참고.
 
 ### 429 토큰 쿼터 메시지 (상세)
 쿼터 초과 시 `message` 에 **어느 윈도우·사용량·리셋 시각**이 포함된다(클라가 그대로 표시 가능):
@@ -515,6 +543,69 @@ offline 로 24h+ 방치된 레코드는 sweeper(`registry.sweep_interval`, 기�
 - **키 관리**: 서버가 P-256 키쌍을 생성·영속(개인키는 `APP_ENCRYPTION_SECRET` AES-GCM 암호화, `a2a_keys` 테이블). v1 단일 활성 키, 회전은 수동(새 kid 발급 시 수신측이 재취득으로 추종). **`APP_ENCRYPTION_SECRET` 변경 시 기존 키 복호화가 실패해 기동이 중단**되므로 운영에서 시크릿을 바꾸려면 `a2a_keys` 행을 비활성화/삭제 후 재기동(새 키 자동 생성).
 
 어드민 콘솔 `/admin/agents`(admin↑)에서 등록 에이전트·status 뱃지·수동 강제 해제를 제공한다.
+
+---
+
+## 서비스 계정 + 장수 API 키 (Service Accounts)
+
+사람 로그인과 분리된 **비대화형 계정**과 그 계정에 발급하는 **장수 API 키**. 헤드리스 워커/CI/에이전트 러너가
+`oma_sa_` 접두사 불투명 토큰을 `Authorization: Bearer` 로 실어 기존 헤드리스 경로(`/agent/chat`, `/chat`, `/models` 등)를
+JWT 없이 호출한다. 관리 엔드포인트는 **전부 admin 전용**(평면 에러 envelope).
+
+- **계정 = 독립 id 공간(UUID v4)**. member 로 흡수하지 않는다. 권한은 **user 레벨 고정**(생성 시 role 미지정 — 최소권한).
+- **키 형식 = `oma_sa_<random>` 불투명 토큰**. 서버는 **SHA-256 해시만 저장**(평문 미보관). 평문은 **발급 응답 1회만** 노출된다.
+- **인증 경로**: 라우터가 `oma_sa_` 접두사로 API키/JWT 를 분기 → JWT 경로는 해시조회 부담 0. 인증 성공 시 합성 Claims(`member_id=계정 id`, level=user)로
+  정책 평면(도구정책·토큰쿼터)이 계정 id 로 자연 조회된다.
+- **401 계약**: 미존재·폐기·만료·계정폐기·인프라 오류는 **전부 401**(5xx 없음 — 클라 무한재시도 방지).
+- 계정당 키 **2개 이상 동시 유효**(무중단 회전). 삭제는 soft(감사 추적) — 계정 폐기 시 딸린 키 전부 폐기.
+
+### 시각 필드 표현
+`created_at`·`expires_at`·`last_used_at` 은 **unix epoch seconds `int64`** 다(다른 REST 계약의 RFC3339 와 의도적 이탈 —
+0 sentinel 표현이 필요하기 때문). **`0` = 무기한(expires_at) / 미사용(last_used_at) / 미폐기**를 뜻한다.
+
+### 엔드포인트
+| 메서드·경로 | 최소 역할 | 기능 |
+|---|---|---|
+| `POST /api/v1/service-accounts` | admin | 계정 생성. `owner_member_id` 는 실재 member 여야 함(폐기 책임자). 201 |
+| `GET /api/v1/service-accounts` | admin | 활성 계정 목록(각 계정의 키 메타 포함, **평문 키 제외**). 200 |
+| `DELETE /api/v1/service-accounts/{id}` | admin | 계정 폐기(+딸린 키 전부 폐기). 204 |
+| `POST /api/v1/service-accounts/{id}/keys` | admin | 키 발급. `{expires_at?}`(0/생략=무기한, 지정 시 **90일 이상 미래**여야 함). 201 — **평문 `token` 여기서만** |
+| `GET /api/v1/service-accounts/{id}/keys` | admin | 키 메타 목록(폐기 포함, 평문 제외). 200 |
+| `DELETE /api/v1/service-accounts/{id}/keys/{key_id}` | admin | 키 폐기. 204 |
+
+### 키 최소 수명 — 90일 하한 (서버 강제, 2026-07-27~)
+`expires_at` 을 지정하면 **발급 시점 기준 90일 이상 미래**여야 한다. 무기한(`0`/생략)은 하한 적용 대상이 아니다.
+초단기 키가 발급되면 헤드리스가 조기 401 로 죽기 때문에 스펙 §2B("무기한 또는 90일 이상")를 서버가 발급 시점에 강제한다.
+- 과거·현재 → 400 `expires_at must be in the future`
+- 미래지만 90일 미만 → 400 `expires_at must be at least 90 days in the future`
+- 경계: 정확히 `now + 90d` 는 **통과**. 하한은 발급 시각에만 적용되며, 이미 발급된 키의 검증(인증 경로)은 변경 없음.
+
+```jsonc
+// POST /service-accounts  req
+{ "name": "ci-runner", "owner_member_id": "…member uuid…", "description": "GitHub Actions" }
+// resp 201
+{ "id": "…sa uuid…", "name": "ci-runner" }
+
+// GET /service-accounts  resp 200
+{ "service_accounts": [ {
+  "id": "…", "name": "ci-runner", "description": "GitHub Actions",
+  "owner_member_id": "…", "created_at": 1769500000, "revoked": false,
+  "keys": [ { "key_id": "…", "created_at": 1769500000, "expires_at": 0,
+             "last_used_at": 1769600000, "revoked": false } ] } ] }
+
+// POST /service-accounts/{id}/keys  req  (expires_at 생략=무기한)
+{ "expires_at": 1801036800 }
+// resp 201  — token(평문)은 이 응답에만 노출, 이후 조회 불가
+{ "key_id": "…", "token": "oma_sa_AbC…", "expires_at": 1801036800 }
+
+// GET /service-accounts/{id}/keys  resp 200
+{ "keys": [ { "key_id": "…", "created_at": 1769500000, "expires_at": 0,
+              "last_used_at": 0, "revoked": false } ] }
+```
+
+- **에러 매핑**: 입력 검증(빈 name/owner, 과거 expires_at, **90일 미만 expires_at**) → 400 · 계정/키 미존재 → 404 · 비-admin → 403.
+- **owner_member_id 미존재** → 400(`owner_member_id does not exist`).
+- `last_used_at` 은 방치 키 탐지용 운영 위생 필드. 인증 성공 시 best-effort 갱신(스로틀 60s — 인증마다 DB 왕복하지 않음).
 
 ---
 
