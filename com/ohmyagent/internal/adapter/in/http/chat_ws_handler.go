@@ -8,7 +8,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	messagingapp "aiagent/com/ohmyagent/internal/application/messaging"
 	domainmessaging "aiagent/com/ohmyagent/internal/domain/messaging"
 )
@@ -55,15 +54,15 @@ type wsErrorEvent struct {
 
 // Serve 는 WS 핸드셰이크 후 송수신 펌프를 구동한다(인증된 사용자).
 func (h *ChatWSHandler) Serve(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
+	actor := actorID(r)
 	conn, err := chatWSUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return nil // Upgrade 가 자체적으로 HTTP 에러를 기록함
 	}
-	client := h.svc.Connect(r.Context(), claims.MemberID) // 허브 등록 + presence(online)
+	client := h.svc.Connect(r.Context(), actor) // 허브 등록 + presence(online)
 
 	go h.writePump(conn, client)
-	h.readPump(conn, client, claims.MemberID)
+	h.readPump(conn, client, actor)
 	return nil
 }
 

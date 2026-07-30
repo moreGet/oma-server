@@ -54,10 +54,10 @@ func (a *OpenAIAdapter) resolveMaxTokens(reqMaxTokens int) int {
 // SDK 클라이언트는 API 키가 필요하므로 호출 시점(ChatStream)에 생성하되, HTTP 커넥션 풀은 공유한다.
 func NewOpenAIAdapter(config domainllmprovider.ProviderConfig, httpClient *http.Client) *OpenAIAdapter {
 	return &OpenAIAdapter{
-		endpoint:   config.Endpoint,
-		model:      config.Model,
-		apiKey:     config.APIKey,
-		apiKeyEnv:  config.APIKeyEnv,
+		endpoint:     config.Endpoint,
+		model:        config.Model,
+		apiKey:       config.APIKey,
+		apiKeyEnv:    config.APIKeyEnv,
 		reasoning:    config.Reasoning,
 		maxTokens:    config.MaxTokens,
 		useResponses: config.UsesResponsesAPI(),
@@ -75,10 +75,7 @@ func (a *OpenAIAdapter) ProviderType() domainllmprovider.ProviderType {
 // 모델은 **서버(관리자)가 Provider 설정으로 정한다** — 클라이언트가 요청으로 바꿀 수 없다.
 // reqModel 을 받는 시그니처는 유지하되 무시한다(호출부 변경 없이 정책을 한 곳에서 강제).
 func (a *OpenAIAdapter) resolveModel(_ string) string {
-	if a.model != "" {
-		return a.model
-	}
-	return defaultOpenAIModel
+	return modelOrDefault(a.model, defaultOpenAIModel)
 }
 
 // newClient 는 API 키와(설정 시) 사용자 지정 엔드포인트로 SDK 클라이언트를 만든다.

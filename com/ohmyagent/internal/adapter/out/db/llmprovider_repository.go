@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -35,50 +34,20 @@ const providerColumns = "id, name, is_active, provider_type, config_json, create
 // "가장 오래된" 행이 조용히 선택된다 — 방금 활성화한 Provider 를 두고 옛 Provider 로
 // 요청이 나가는 형태로 드러난다. updated_at DESC 로 가장 최근에 활성화된 것을 고른다.
 func (r *LLMProviderRepository) GetActive(ctx context.Context) (domainllmprovider.LLMProvider, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+providerColumns+" FROM llm_providers WHERE is_active=? ORDER BY updated_at DESC LIMIT 1", true)
-	p, err := scanProvider(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainllmprovider.LLMProvider{}, domainllmprovider.ErrNoActiveProvider
-	}
-	if err != nil {
-		return domainllmprovider.LLMProvider{}, fmt.Errorf("get active provider: %w", err)
-	}
-	return p, nil
+	return queryOne(ctx, r.db, "get active provider", domainllmprovider.ErrNoActiveProvider, scanProvider,
+		"SELECT "+providerColumns+" FROM llm_providers WHERE is_active=? ORDER BY updated_at DESC LIMIT 1", true)
 }
 
 // FindByID 는 단건 조회. 없으면 ErrNotFound.
 func (r *LLMProviderRepository) FindByID(ctx context.Context, id string) (domainllmprovider.LLMProvider, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+providerColumns+" FROM llm_providers WHERE id=?", id)
-	p, err := scanProvider(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainllmprovider.LLMProvider{}, domainllmprovider.ErrNotFound
-	}
-	if err != nil {
-		return domainllmprovider.LLMProvider{}, fmt.Errorf("find provider id=%s: %w", id, err)
-	}
-	return p, nil
+	return queryOne(ctx, r.db, "find provider id="+id, domainllmprovider.ErrNotFound, scanProvider,
+		"SELECT "+providerColumns+" FROM llm_providers WHERE id=?", id)
 }
 
 // List 는 전체 Provider 목록을 반환한다.
 func (r *LLMProviderRepository) List(ctx context.Context) ([]domainllmprovider.LLMProvider, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT "+providerColumns+" FROM llm_providers ORDER BY created_at DESC")
-	if err != nil {
-		return nil, fmt.Errorf("list providers: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]domainllmprovider.LLMProvider, 0)
-	for rows.Next() {
-		p, scanErr := scanProvider(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("scan provider: %w", scanErr)
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate providers: %w", err)
-	}
-	return out, nil
+	return queryList(ctx, r.db, "list providers", scanProvider,
+		"SELECT "+providerColumns+" FROM llm_providers ORDER BY created_at DESC")
 }
 
 // Save 는 새 Provider 를 INSERT 한다.

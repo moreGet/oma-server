@@ -41,30 +41,14 @@ func (r *MemberToolPolicyRepository) Get(ctx context.Context, memberID string) (
 
 // All 은 모든 멤버 정책을 반환한다(매니저 캐시 적재용).
 func (r *MemberToolPolicyRepository) All(ctx context.Context) ([]domaintoolpolicy.MemberPolicy, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT "+memberToolPolicyCols+" FROM member_tool_policy")
-	if err != nil {
-		return nil, fmt.Errorf("member toolpolicy: all: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var out []domaintoolpolicy.MemberPolicy
-	for rows.Next() {
-		p, err := scanMemberToolPolicy(rows)
-		if err != nil {
-			return nil, fmt.Errorf("member toolpolicy: scan: %w", err)
-		}
-		out = append(out, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("member toolpolicy: rows: %w", err)
-	}
-	return out, nil
+	return queryList(ctx, r.db, "member toolpolicy: all", scanMemberToolPolicy,
+		"SELECT "+memberToolPolicyCols+" FROM member_tool_policy")
 }
 
 // Save 는 멤버 정책을 upsert(UPDATE → 없으면 INSERT) 한다(드라이버 무관 portable upsert).
 func (r *MemberToolPolicyRepository) Save(ctx context.Context, p domaintoolpolicy.MemberPolicy) error {
-	enabled := encodeList(p.Enabled)
-	disabled := encodeList(p.Disabled)
+	enabled := encodeJSONList(p.Enabled)
+	disabled := encodeJSONList(p.Disabled)
 
 	res, err := r.db.ExecContext(ctx,
 		"UPDATE member_tool_policy SET enabled=?, disabled=?, updated_at=?, updated_by=? WHERE member_id=?",
@@ -92,7 +76,7 @@ func (r *MemberToolPolicyRepository) Delete(ctx context.Context, memberID string
 }
 
 // scanMemberToolPolicy 는 단일 행을 MemberPolicy 로 스캔한다(*sql.Row/*sql.Rows 공용).
-func scanMemberToolPolicy(s interface{ Scan(...any) error }) (domaintoolpolicy.MemberPolicy, error) {
+func scanMemberToolPolicy(s rowScanner) (domaintoolpolicy.MemberPolicy, error) {
 	var (
 		memberID          string
 		enabled, disabled sql.NullString
@@ -104,8 +88,8 @@ func scanMemberToolPolicy(s interface{ Scan(...any) error }) (domaintoolpolicy.M
 	}
 	return domaintoolpolicy.MemberPolicy{
 		MemberID:  memberID,
-		Enabled:   decodeStringList(enabled.String),
-		Disabled:  decodeStringList(disabled.String),
+		Enabled:   decodeJSONList[string](enabled.String),
+		Disabled:  decodeJSONList[string](disabled.String),
 		UpdatedAt: updatedAt,
 		UpdatedBy: updatedBy.String,
 	}, nil

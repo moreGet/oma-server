@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainproject "aiagent/com/ohmyagent/internal/domain/project"
 )
 
@@ -29,29 +28,24 @@ func NewProjectHandler(svc projectService) *ProjectHandler { return &ProjectHand
 // --- GET /api/v1/projects ---
 
 func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) error {
-	owner := ownerOf(r)
+	owner := actorID(r)
 	projects, err := h.svc.ListProjects(r.Context(), owner)
 	if err != nil {
 		return projectErrToHTTP(err)
 	}
-	out := projectsResp{Projects: make([]projectDTO, 0, len(projects))}
-	for _, p := range projects {
-		out.Projects = append(out.Projects, toProjectDTO(p))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, projectsResp{Projects: mapSlice(projects, toProjectDTO)})
 	return nil
 }
 
 // --- POST /api/v1/projects (생성/업서트) ---
 
 func (h *ProjectHandler) Upsert(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req createProjectReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[createProjectReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	p, err := h.svc.UpsertProject(r.Context(), domainproject.UpsertProjectCommand{
-		OwnerID: ownerOf(r), ClientID: req.ClientID, Name: req.Name,
+		OwnerID: actorID(r), ClientID: req.ClientID, Name: req.Name,
 	})
 	if err != nil {
 		return projectErrToHTTP(err)
@@ -63,24 +57,20 @@ func (h *ProjectHandler) Upsert(w http.ResponseWriter, r *http.Request) error {
 // --- GET /api/v1/projects/{id} (대화 요약 포함) ---
 
 func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) error {
-	p, convs, err := h.svc.GetProject(r.Context(), ownerOf(r), r.PathValue("id"))
+	p, convs, err := h.svc.GetProject(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return projectErrToHTTP(err)
 	}
-	detail := projectDetailDTO{ID: p.ID, Name: p.Name, Conversations: make([]conversationSummaryDTO, 0, len(convs))}
-	for _, c := range convs {
-		detail.Conversations = append(detail.Conversations, conversationSummaryDTO{
-			ID: c.ID, ClientID: c.ClientID, Title: c.Title, UpdatedUTC: fmtUTC(c.UpdatedUTC), MessageCount: c.MessageCount,
-		})
-	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, projectDetailDTO{
+		ID: p.ID, Name: p.Name, Conversations: mapSlice(convs, toConversationSummaryDTO),
+	})
 	return nil
 }
 
 // --- DELETE /api/v1/projects/{id} ---
 
 func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) error {
-	if err := h.svc.DeleteProject(r.Context(), ownerOf(r), r.PathValue("id")); err != nil {
+	if err := h.svc.DeleteProject(r.Context(), actorID(r), r.PathValue("id")); err != nil {
 		return projectErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusNoContent, nil)
@@ -96,7 +86,7 @@ func (h *ProjectHandler) UpsertConversation(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	c, err := h.svc.UpsertConversation(r.Context(), domainproject.UpsertConversationCommand{
-		OwnerID:      ownerOf(r),
+		OwnerID:      actorID(r),
 		ProjectID:    r.PathValue("id"),
 		ClientID:     req.ClientID,
 		Title:        req.Title,
@@ -115,7 +105,7 @@ func (h *ProjectHandler) UpsertConversation(w http.ResponseWriter, r *http.Reque
 // --- DELETE /api/v1/projects/{id}/conversations/{cid} ---
 
 func (h *ProjectHandler) DeleteConversation(w http.ResponseWriter, r *http.Request) error {
-	if err := h.svc.DeleteConversation(r.Context(), ownerOf(r), r.PathValue("cid")); err != nil {
+	if err := h.svc.DeleteConversation(r.Context(), actorID(r), r.PathValue("cid")); err != nil {
 		return projectErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusNoContent, nil)
@@ -177,9 +167,11 @@ func toProjectDTO(p domainproject.Project) projectDTO {
 	}
 }
 
-func ownerOf(r *http.Request) string {
-	claims, _ := security.ClaimsFrom(r.Context())
-	return claims.MemberID
+func toConversationSummaryDTO(c domainproject.Conversation) conversationSummaryDTO {
+	return conversationSummaryDTO{
+		ID: c.ID, ClientID: c.ClientID, Title: c.Title,
+		UpdatedUTC: fmtUTC(c.UpdatedUTC), MessageCount: c.MessageCount,
+	}
 }
 
 func fmtUTC(t time.Time) string {

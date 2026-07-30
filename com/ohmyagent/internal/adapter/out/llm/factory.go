@@ -50,6 +50,14 @@ func requireAPIKey(provider, apiKey, apiKeyEnv string) (string, error) {
 	return key, nil
 }
 
+// modelOrDefault 는 Provider 설정의 모델명을 쓰되, 비어 있으면 어댑터 기본 모델로 폴백한다.
+func modelOrDefault(model, fallback string) string {
+	if model != "" {
+		return model
+	}
+	return fallback
+}
+
 // EXTERNAL Provider 를 모델명 접두사로 어댑터에 분기한다(claude*→Claude, gemini*→Gemini, 그 외→OpenAI).
 const (
 	claudeModelPrefix = "claude"

@@ -62,15 +62,8 @@ func (r *AgentRegistryRepository) Upsert(ctx context.Context, a domainagentregis
 
 // Get 은 id 단건 조회다. 없으면 도메인 ErrNotFound.
 func (r *AgentRegistryRepository) Get(ctx context.Context, id string) (domainagentregistry.Agent, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+agentColumns+" FROM agents WHERE id=?", id)
-	a, err := scanAgent(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainagentregistry.Agent{}, domainagentregistry.ErrNotFound
-	}
-	if err != nil {
-		return domainagentregistry.Agent{}, fmt.Errorf("agent registry: get: %w", err)
-	}
-	return a, nil
+	return queryOne(ctx, r.db, "agent registry: get", domainagentregistry.ErrNotFound, scanAgent,
+		"SELECT "+agentColumns+" FROM agents WHERE id=?", id)
 }
 
 // Touch 는 heartbeat 시각을 갱신한다. (id, ownerID) 매칭 행이 없으면 ErrNotFound.
@@ -154,23 +147,7 @@ func (r *AgentRegistryRepository) List(ctx context.Context, f domainagentregistr
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
 	q += " ORDER BY name"
-	rows, err := r.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("agent registry: list: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainagentregistry.Agent
-	for rows.Next() {
-		a, err := scanAgent(rows)
-		if err != nil {
-			return nil, fmt.Errorf("agent registry: scan: %w", err)
-		}
-		out = append(out, a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("agent registry: rows: %w", err)
-	}
-	return out, nil
+	return queryList(ctx, r.db, "agent registry: list", scanAgent, q, args...)
 }
 
 // jsonElemLike 는 json 배열 원소 정확 일치용 LIKE 패턴(`%"v"%`)을 만든다.

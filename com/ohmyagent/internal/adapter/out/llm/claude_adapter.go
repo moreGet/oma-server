@@ -51,10 +51,7 @@ func (a *ClaudeAdapter) ProviderType() domainllmprovider.ProviderType {
 // resolveModel 은 사용할 모델을 결정한다.
 // 모델은 서버(관리자)의 Provider 설정으로만 정해지며 클라이언트 요청은 무시한다.
 func (a *ClaudeAdapter) resolveModel(_ string) string {
-	if a.model != "" {
-		return a.model
-	}
-	return defaultClaudeModel
+	return modelOrDefault(a.model, defaultClaudeModel)
 }
 
 // cacheBreakpoint 는 cache_control 브레이크포인트 값이다.

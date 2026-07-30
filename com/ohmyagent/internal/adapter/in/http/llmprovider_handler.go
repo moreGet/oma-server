@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
@@ -23,24 +22,18 @@ func NewProviderHandler(svc domainllmprovider.Service) *ProviderHandler {
 // --- GET /api/v1/llm-providers ---
 
 func (h *ProviderHandler) List(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	providers, err := h.svc.List(r.Context(), claims.MemberID)
+	providers, err := h.svc.List(r.Context(), actorID(r))
 	if err != nil {
 		return providerErrToHTTP(err)
 	}
-	items := make([]providerResp, 0, len(providers))
-	for _, p := range providers {
-		items = append(items, toProviderResp(p))
-	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, mapSlice(providers, toProviderResp))
 	return nil
 }
 
 // --- GET /api/v1/llm-providers/{id} ---
 
 func (h *ProviderHandler) Get(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	p, err := h.svc.Get(r.Context(), claims.MemberID, r.PathValue("id"))
+	p, err := h.svc.Get(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return providerErrToHTTP(err)
 	}
@@ -51,10 +44,8 @@ func (h *ProviderHandler) Get(w http.ResponseWriter, r *http.Request) error {
 // --- POST /api/v1/llm-providers ---
 
 func (h *ProviderHandler) Create(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req createProviderReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[createProviderReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	p, err := h.svc.Create(r.Context(), domainllmprovider.CreateCommand{
@@ -62,7 +53,7 @@ func (h *ProviderHandler) Create(w http.ResponseWriter, r *http.Request) error {
 		ProviderType: domainllmprovider.ProviderType(req.ProviderType),
 		IsActive:     req.IsActive,
 		Config:       fromConfigDTO(req.Config),
-		ActorID:      claims.MemberID,
+		ActorID:      actorID(r),
 	})
 	if err != nil {
 		return providerErrToHTTP(err)
@@ -74,16 +65,14 @@ func (h *ProviderHandler) Create(w http.ResponseWriter, r *http.Request) error {
 // --- PATCH /api/v1/llm-providers/{id}/config ---
 
 func (h *ProviderHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req updateConfigReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[updateConfigReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	p, err := h.svc.UpdateConfig(r.Context(), domainllmprovider.UpdateConfigCommand{
 		ID:      r.PathValue("id"),
 		Config:  fromConfigDTO(req.Config),
-		ActorID: claims.MemberID,
+		ActorID: actorID(r),
 	})
 	if err != nil {
 		return providerErrToHTTP(err)
@@ -95,10 +84,9 @@ func (h *ProviderHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) e
 // --- PUT /api/v1/llm-providers/{id}/activate ---
 
 func (h *ProviderHandler) Activate(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	if err := h.svc.Activate(r.Context(), domainllmprovider.ActivateCommand{
 		ID:      r.PathValue("id"),
-		ActorID: claims.MemberID,
+		ActorID: actorID(r),
 	}); err != nil {
 		return providerErrToHTTP(err)
 	}
@@ -109,10 +97,9 @@ func (h *ProviderHandler) Activate(w http.ResponseWriter, r *http.Request) error
 // --- DELETE /api/v1/llm-providers/{id} ---
 
 func (h *ProviderHandler) Delete(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	if err := h.svc.Delete(r.Context(), domainllmprovider.DeleteCommand{
 		ID:      r.PathValue("id"),
-		ActorID: claims.MemberID,
+		ActorID: actorID(r),
 	}); err != nil {
 		return providerErrToHTTP(err)
 	}
@@ -123,8 +110,7 @@ func (h *ProviderHandler) Delete(w http.ResponseWriter, r *http.Request) error {
 // --- POST /api/v1/llm-providers/{id}/test (연결 테스트) ---
 
 func (h *ProviderHandler) Test(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.TestConnection(r.Context(), claims.MemberID, r.PathValue("id")); err != nil {
+	if err := h.svc.TestConnection(r.Context(), actorID(r), r.PathValue("id")); err != nil {
 		return providerErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusOK, messageResp{Message: "connection ok"})

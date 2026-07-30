@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
 )
 
@@ -25,8 +24,7 @@ func NewQuotaHandler(svc quotaStatusReader) *QuotaHandler {
 
 // Me 는 인증된 사용자의 일/주/월 쿼터 현황(한도·사용·잔여·사용률)을 반환한다.
 func (h *QuotaHandler) Me(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	st, err := h.svc.Status(r.Context(), claims.MemberID)
+	st, err := h.svc.Status(r.Context(), actorID(r))
 	if err != nil {
 		return err
 	}

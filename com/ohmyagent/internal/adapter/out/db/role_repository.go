@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
@@ -26,37 +25,13 @@ const roleColumns = "id, name, level"
 
 // FindByID 는 단건 조회. 없으면 domainauth.ErrNotFound.
 func (r *RoleRepository) FindByID(ctx context.Context, id int) (domainauth.Role, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+roleColumns+" FROM roles WHERE id=?", id)
-	role, err := scanRole(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainauth.Role{}, domainauth.ErrNotFound
-	}
-	if err != nil {
-		return domainauth.Role{}, fmt.Errorf("find role id=%d: %w", id, err)
-	}
-	return role, nil
+	return queryOne(ctx, r.db, fmt.Sprintf("find role id=%d", id), domainauth.ErrNotFound, scanRole,
+		"SELECT "+roleColumns+" FROM roles WHERE id=?", id)
 }
 
 // List 는 전체 role 목록을 반환한다.
 func (r *RoleRepository) List(ctx context.Context) ([]domainauth.Role, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT "+roleColumns+" FROM roles ORDER BY id")
-	if err != nil {
-		return nil, fmt.Errorf("list roles: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]domainauth.Role, 0, 3)
-	for rows.Next() {
-		role, scanErr := scanRole(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("scan role: %w", scanErr)
-		}
-		out = append(out, role)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate roles: %w", err)
-	}
-	return out, nil
+	return queryList(ctx, r.db, "list roles", scanRole, "SELECT "+roleColumns+" FROM roles ORDER BY id")
 }
 
 // scanRole 은 한 행을 domainauth.Role 로 스캔한다.

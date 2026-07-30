@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 )
 
@@ -43,8 +42,7 @@ type toolPolicyResp struct {
 
 // ToolsPolicy 는 세션 도구 정책(모드 + cached 목록)을 반환한다(인증 멤버에 유효한 정책).
 func (h *ClientHandler) ToolsPolicy(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	mode, enabled, disabled := h.policy.EffectivePolicy(claims.MemberID)
+	mode, enabled, disabled := h.policy.EffectivePolicy(actorID(r))
 	if mode != "realtime" {
 		mode = "cached" // 그 외 값은 cached 로 간주(스펙)
 	}
@@ -74,8 +72,7 @@ func (h *ClientHandler) ToolsAuthorize(w http.ResponseWriter, r *http.Request) e
 	if req.Tool == "" {
 		return ErrBadRequest("tool is required")
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
-	allowed, reason := h.authorize(claims.MemberID, req.Tool)
+	allowed, reason := h.authorize(actorID(r), req.Tool)
 	writeJSON(w, http.StatusOK, toolAuthorizeResp{Allowed: allowed, Reason: reason})
 	return nil
 }

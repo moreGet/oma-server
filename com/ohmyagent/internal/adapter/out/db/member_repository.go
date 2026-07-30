@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -73,28 +72,14 @@ func (r *MemberRepository) Update(ctx context.Context, m domainauth.Member) erro
 
 // FindByID 는 단건 조회. 없으면 domainauth.ErrNotFound.
 func (r *MemberRepository) FindByID(ctx context.Context, id string) (domainauth.Member, error) {
-	row := r.db.QueryRowContext(ctx, memberSelect+" WHERE m.id=?", id)
-	m, err := scanMember(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainauth.Member{}, domainauth.ErrNotFound
-	}
-	if err != nil {
-		return domainauth.Member{}, fmt.Errorf("find member id=%s: %w", id, err)
-	}
-	return m, nil
+	return queryOne(ctx, r.db, "find member id="+id, domainauth.ErrNotFound, scanMember,
+		memberSelect+" WHERE m.id=?", id)
 }
 
 // FindByUsername 은 username 으로 조회. 없으면 domainauth.ErrNotFound.
 func (r *MemberRepository) FindByUsername(ctx context.Context, username string) (domainauth.Member, error) {
-	row := r.db.QueryRowContext(ctx, memberSelect+" WHERE m.username=?", username)
-	m, err := scanMember(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainauth.Member{}, domainauth.ErrNotFound
-	}
-	if err != nil {
-		return domainauth.Member{}, fmt.Errorf("find member username=%s: %w", username, err)
-	}
-	return m, nil
+	return queryOne(ctx, r.db, "find member username="+username, domainauth.ErrNotFound, scanMember,
+		memberSelect+" WHERE m.username=?", username)
 }
 
 // List 는 필터(role_id, limit/offset)에 맞는 목록과 total 을 반환한다. RoleID 0 = 전체.
@@ -122,22 +107,9 @@ func (r *MemberRepository) List(ctx context.Context, filter domainauth.MemberFil
 		listArgs = append(listArgs, filter.Limit, filter.Offset)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, listArgs...)
+	out, err := queryList(ctx, r.db, "list members", scanMember, query, listArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list members: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]domainauth.Member, 0)
-	for rows.Next() {
-		m, scanErr := scanMember(rows)
-		if scanErr != nil {
-			return nil, 0, fmt.Errorf("scan member: %w", scanErr)
-		}
-		out = append(out, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterate members: %w", err)
+		return nil, 0, err
 	}
 	return out, total, nil
 }

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainchat "aiagent/com/ohmyagent/internal/domain/chat"
 	domainquota "aiagent/com/ohmyagent/internal/domain/quota"
 	domaintranscript "aiagent/com/ohmyagent/internal/domain/transcript"
@@ -52,17 +51,15 @@ func NewChatHandler(svc domainchat.Service, recorder domaintranscript.Recorder, 
 // 스트리밍 시작(200 + SSE 헤더) 전에 발생한 에러(검증/활성 Provider 없음 등)는
 // 일반 JSON AppError 로 반환한다. 시작 이후의 에러는 SSE error 이벤트로 보낸다.
 func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-
-	var req chatReq
-	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+	actor := actorID(r)
+	req, err := bindJSON[chatReq](w, r, maxLargeJSONBytes)
+	if err != nil {
 		return err
 	}
 
 	// 쿼터 사전 검사: 이번 달 한도 초과면 스트리밍 시작 전 429.
 	if h.quota != nil {
-		if err := h.quota.Check(r.Context(), claims.MemberID); err != nil {
+		if err := h.quota.Check(r.Context(), actor); err != nil {
 			return chatErrToHTTP(err)
 		}
 	}
@@ -84,7 +81,7 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 	var finishReason string
 	var usage *domainchat.Usage
 
-	streamErr := h.svc.Stream(r.Context(), req.toCommand(claims.MemberID), func(chunk domainchat.StreamChunk) error {
+	streamErr := h.svc.Stream(r.Context(), req.toCommand(actor), func(chunk domainchat.StreamChunk) error {
 		if err := ensureHeader(); err != nil {
 			return err
 		}
@@ -114,14 +111,14 @@ func (h *ChatHandler) Stream(w http.ResponseWriter, r *http.Request) error {
 
 	// 정상 완료 시: 감사 이벤트 + 대화 이력 비동기 기록 + 쿼터 사용량 누적(usage 없으면 추정치).
 	response := respBuf.String()
-	h.recordChat(claims.MemberID, req, response, finishReason, usage, start)
+	h.recordChat(actor, req, response, finishReason, usage, start)
 	if h.quota != nil {
 		total := 0
 		if usage != nil {
 			total = usage.TotalTokens
 		}
 		ctx, cancel := accountingCtx(r)
-		h.quota.Add(ctx, claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
+		h.quota.Add(ctx, actor, quotaTokens(total, func() string { return req.promptText() + response }))
 		cancel()
 	}
 
@@ -195,12 +192,10 @@ func (req chatReq) promptText() string {
 }
 
 func (req chatReq) toCommand(actorID string) domainchat.ChatCommand {
-	msgs := make([]domainchat.Message, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		msgs = append(msgs, domainchat.Message{Role: domainchat.Role(m.Role), Content: m.Content})
-	}
 	return domainchat.ChatCommand{
-		Messages:    msgs,
+		Messages: mapSlice(req.Messages, func(m chatMessageDTO) domainchat.Message {
+			return domainchat.Message{Role: domainchat.Role(m.Role), Content: m.Content}
+		}),
 		Model:       req.Model,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,

@@ -137,10 +137,7 @@ func (s *Service) SendMessage(ctx context.Context, actorID, roomID, content stri
 	if err := s.messages.Save(ctx, msg); err != nil {
 		return domainmessaging.Message{}, err
 	}
-	payload, err := json.Marshal(outboundEvent{Type: "message", Message: msgToDTO(msg)})
-	if err == nil {
-		s.bc.Broadcast(members, payload)
-	}
+	s.broadcast(members, outboundEvent{Type: "message", Message: msgToDTO(msg)})
 	return msg, nil
 }
 
@@ -166,12 +163,10 @@ func (s *Service) Disconnect(ctx context.Context, c *Client) {
 
 func (s *Service) broadcastPresence(ctx context.Context, memberID string, online bool) {
 	targets, err := s.rooms.CoMembers(ctx, memberID)
-	if err != nil || len(targets) == 0 {
+	if err != nil {
 		return
 	}
-	if payload, mErr := json.Marshal(outboundEvent{Type: "presence", Presence: &presenceDTO{MemberID: memberID, Online: online}}); mErr == nil {
-		s.bc.Broadcast(targets, payload)
-	}
+	s.broadcast(targets, outboundEvent{Type: "presence", Presence: &presenceDTO{MemberID: memberID, Online: online}})
 }
 
 // RoomPresence 는 방 멤버 중 현재 온라인인 멤버 ID 를 반환한다(멤버만).
@@ -409,12 +404,7 @@ func (s *Service) ownMessage(ctx context.Context, actorID, roomID, messageID str
 
 // broadcastMessageEvent 는 메시지 수정/삭제 이벤트를 방 멤버에게 전송한다.
 func (s *Service) broadcastMessageEvent(members []string, eventType string, msg domainmessaging.Message) {
-	if len(members) == 0 {
-		return
-	}
-	if payload, mErr := json.Marshal(outboundEvent{Type: eventType, Message: msgToDTO(msg)}); mErr == nil {
-		s.bc.Broadcast(members, payload)
-	}
+	s.broadcast(members, outboundEvent{Type: eventType, Message: msgToDTO(msg)})
 }
 
 // MarkRead 는 방을 "지금까지" 읽음 처리하고 방 멤버에게 read 이벤트를 브로드캐스트한다(멤버만).
@@ -427,14 +417,10 @@ func (s *Service) MarkRead(ctx context.Context, actorID, roomID string) (int64, 
 	if err := s.rooms.MarkRead(ctx, roomID, actorID, readAt); err != nil {
 		return 0, err
 	}
-	if len(members) > 0 {
-		if payload, mErr := json.Marshal(outboundEvent{
-			Type: "read",
-			Read: &readDTO{RoomID: roomID, MemberID: actorID, LastReadAt: readAt},
-		}); mErr == nil {
-			s.bc.Broadcast(members, payload)
-		}
-	}
+	s.broadcast(members, outboundEvent{
+		Type: "read",
+		Read: &readDTO{RoomID: roomID, MemberID: actorID, LastReadAt: readAt},
+	})
 	return readAt, nil
 }
 
@@ -469,15 +455,10 @@ func (s *Service) Typing(ctx context.Context, actorID, roomID, state string) err
 	if !isMember {
 		return domainmessaging.ErrNotMember
 	}
-	if len(others) == 0 {
-		return nil
-	}
-	if payload, mErr := json.Marshal(outboundEvent{
+	s.broadcast(others, outboundEvent{
 		Type:   "typing",
 		Typing: &typingDTO{RoomID: roomID, MemberID: actorID, State: state},
-	}); mErr == nil {
-		s.bc.Broadcast(others, payload)
-	}
+	})
 	return nil
 }
 
@@ -581,17 +562,23 @@ func (s *Service) LeaveRoom(ctx context.Context, actorID, roomID string) error {
 	return nil
 }
 
-// broadcastMember 는 멤버 변경(joined/left) 이벤트를 대상 멤버들에게 브로드캐스트한다.
-func (s *Service) broadcastMember(targets []string, eventType, roomID, memberID string) {
+// broadcast 는 이벤트를 직렬화해 대상에게 팬아웃한다(대상 없거나 직렬화 실패면 무시).
+// WS 이벤트 전송의 단일 통로 — 개별 이벤트 헬퍼는 모두 이 함수를 거친다.
+func (s *Service) broadcast(targets []string, ev outboundEvent) {
 	if len(targets) == 0 {
 		return
 	}
-	if payload, err := json.Marshal(outboundEvent{
-		Type:   eventType,
-		Member: &memberEventDTO{RoomID: roomID, MemberID: memberID},
-	}); err == nil {
+	if payload, err := json.Marshal(ev); err == nil {
 		s.bc.Broadcast(targets, payload)
 	}
+}
+
+// broadcastMember 는 멤버 변경(joined/left) 이벤트를 대상 멤버들에게 브로드캐스트한다.
+func (s *Service) broadcastMember(targets []string, eventType, roomID, memberID string) {
+	s.broadcast(targets, outboundEvent{
+		Type:   eventType,
+		Member: &memberEventDTO{RoomID: roomID, MemberID: memberID},
+	})
 }
 
 // typingRoomMembers 는 타이핑 전파용 멤버 목록을 캐시 우선으로 반환한다.

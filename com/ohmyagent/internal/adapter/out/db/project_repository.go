@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -42,39 +41,27 @@ func (r *ProjectRepository) UpsertProject(ctx context.Context, p domainproject.P
 }
 
 func (r *ProjectRepository) ListProjects(ctx context.Context, ownerID string) ([]domainproject.Project, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, client_id, name, created_utc, updated_utc,
+	return queryList(ctx, r.db, "project: list", func(sc rowScanner) (domainproject.Project, error) {
+		return scanProject(sc, ownerID)
+	}, `SELECT id, client_id, name, created_utc, updated_utc,
 		(SELECT COUNT(*) FROM conversations c WHERE c.project_id = projects.id) AS cnt
 		FROM projects WHERE owner_id=? ORDER BY updated_utc DESC`, ownerID)
-	if err != nil {
-		return nil, fmt.Errorf("project: list: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainproject.Project
-	for rows.Next() {
-		p := domainproject.Project{OwnerID: ownerID}
-		var createdUnix, updatedUnix int64
-		if err := rows.Scan(&p.ID, &p.ClientID, &p.Name, &createdUnix, &updatedUnix, &p.ConversationCount); err != nil {
-			return nil, fmt.Errorf("project: scan: %w", err)
-		}
-		p.CreatedUTC = time.Unix(createdUnix, 0).UTC()
-		p.UpdatedUTC = time.Unix(updatedUnix, 0).UTC()
-		out = append(out, p)
-	}
-	return out, rows.Err()
 }
 
 func (r *ProjectRepository) GetProject(ctx context.Context, ownerID, id string) (domainproject.Project, error) {
+	return queryOne(ctx, r.db, "project: get", domainproject.ErrNotFound, func(sc rowScanner) (domainproject.Project, error) {
+		return scanProject(sc, ownerID)
+	}, `SELECT id, client_id, name, created_utc, updated_utc,
+		(SELECT COUNT(*) FROM conversations c WHERE c.project_id = projects.id)
+		FROM projects WHERE owner_id=? AND id=?`, ownerID, id)
+}
+
+// scanProject 는 한 행을 프로젝트로 스캔한다(unix 초 → UTC 시각). ownerID 는 조회 조건이라 행에 없다.
+func scanProject(sc rowScanner, ownerID string) (domainproject.Project, error) {
 	p := domainproject.Project{OwnerID: ownerID}
 	var createdUnix, updatedUnix int64
-	err := r.db.QueryRowContext(ctx, `SELECT id, client_id, name, created_utc, updated_utc,
-		(SELECT COUNT(*) FROM conversations c WHERE c.project_id = projects.id)
-		FROM projects WHERE owner_id=? AND id=?`, ownerID, id).
-		Scan(&p.ID, &p.ClientID, &p.Name, &createdUnix, &updatedUnix, &p.ConversationCount)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainproject.Project{}, domainproject.ErrNotFound
-	}
-	if err != nil {
-		return domainproject.Project{}, fmt.Errorf("project: get: %w", err)
+	if err := sc.Scan(&p.ID, &p.ClientID, &p.Name, &createdUnix, &updatedUnix, &p.ConversationCount); err != nil {
+		return domainproject.Project{}, err
 	}
 	p.CreatedUTC = time.Unix(createdUnix, 0).UTC()
 	p.UpdatedUTC = time.Unix(updatedUnix, 0).UTC()

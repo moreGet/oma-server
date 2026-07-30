@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 )
 
@@ -39,9 +38,8 @@ type memberToolPolicyResp struct {
 
 // Get 은 멤버의 도구 정책 오버라이드를 반환한다(GET /api/v1/members/{id}/tool-policy, admin).
 func (h *MemberToolPolicyHandler) Get(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	memberID := r.PathValue("id")
-	p, err := h.mgr.GetMemberPolicy(r.Context(), claims.MemberID, memberID)
+	p, err := h.mgr.GetMemberPolicy(r.Context(), actorID(r), memberID)
 	if err != nil {
 		return err
 	}
@@ -57,17 +55,16 @@ func (h *MemberToolPolicyHandler) Put(w http.ResponseWriter, r *http.Request) er
 	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
 		return err
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
 	memberID := r.PathValue("id")
 	if err := h.mgr.UpdateMemberPolicy(r.Context(), domaintoolpolicy.MemberUpdateCommand{
 		MemberID: memberID,
 		Enabled:  req.Enabled,
 		Disabled: req.Disabled,
-		ActorID:  claims.MemberID,
+		ActorID:  actorID(r),
 	}); err != nil {
 		return err
 	}
-	p, err := h.mgr.GetMemberPolicy(r.Context(), claims.MemberID, memberID)
+	p, err := h.mgr.GetMemberPolicy(r.Context(), actorID(r), memberID)
 	if err != nil {
 		return err
 	}

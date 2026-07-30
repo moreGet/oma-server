@@ -3,7 +3,6 @@ package httpin
 import (
 	"net/http"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
@@ -37,10 +36,9 @@ type statsResp struct {
 
 // Get 은 대시보드 집계를 반환한다(admin↑; ListMembers 게이트가 강제).
 func (h *StatsHandler) Get(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	actorID := claims.MemberID
+	actor := actorID(r)
 
-	members, total, err := h.auth.ListMembers(r.Context(), actorID, domainauth.MemberFilter{})
+	members, total, err := h.auth.ListMembers(r.Context(), actor, domainauth.MemberFilter{})
 	if err != nil {
 		return authErrToHTTP(err)
 	}
@@ -55,7 +53,7 @@ func (h *StatsHandler) Get(w http.ResponseWriter, r *http.Request) error {
 		byRole[domainauth.NameForRoleID(m.Role.ID)]++
 	}
 
-	providers, err := h.providers.List(r.Context(), actorID)
+	providers, err := h.providers.List(r.Context(), actor)
 	if err != nil {
 		return providerErrToHTTP(err)
 	}

@@ -40,10 +40,7 @@ func (a *OllamaAdapter) ProviderType() domainllmprovider.ProviderType {
 // resolveModel 은 모델명을 결정한다.
 // 모델은 서버(관리자)의 Provider 설정으로만 정해지며 클라이언트 요청은 무시한다.
 func (a *OllamaAdapter) resolveModel(_ string) string {
-	if a.model != "" {
-		return a.model
-	}
-	return defaultOllamaModel
+	return modelOrDefault(a.model, defaultOllamaModel)
 }
 
 // newOllamaClient 는 어댑터 설정에 맞는 SDK 클라이언트를 만든다.

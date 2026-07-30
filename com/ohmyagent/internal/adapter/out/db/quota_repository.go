@@ -55,28 +55,21 @@ func (r *QuotaRepository) UsageForPeriods(ctx context.Context, memberID string, 
 	if len(periods) == 0 {
 		return out, nil
 	}
-	args := make([]any, 0, len(periods)+1)
-	args = append(args, memberID)
-	ph := make([]string, len(periods))
-	for i, p := range periods {
-		ph[i] = "?"
-		args = append(args, p)
-	}
-	q := "SELECT period, used_tokens FROM token_usage WHERE member_id=? AND period IN (" + strings.Join(ph, ",") + ")"
-	rows, err := r.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("quota: usage for periods: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
+	ph, periodArgs := inPlaceholders(periods)
+	args := append([]any{memberID}, periodArgs...)
+	err := queryEach(ctx, r.db, "quota: usage for periods", func(sc rowScanner) error {
 		var p string
 		var v int
-		if err := rows.Scan(&p, &v); err != nil {
-			return nil, fmt.Errorf("quota: scan usage: %w", err)
+		if err := sc.Scan(&p, &v); err != nil {
+			return err
 		}
 		out[p] = v
+		return nil
+	}, "SELECT period, used_tokens FROM token_usage WHERE member_id=? AND period IN ("+ph+")", args...)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // UsageByPeriod 는 해당 기간 전체 멤버 사용량 맵을 반환한다.
@@ -122,21 +115,20 @@ func (r *QuotaRepository) SetMemberLimits(ctx context.Context, memberID string, 
 
 // AllMemberLimits 는 하나라도 0 보다 큰 멤버별 한도 맵을 반환한다.
 func (r *QuotaRepository) AllMemberLimits(ctx context.Context) (map[string]domainquota.Limits, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits WHERE daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0")
-	if err != nil {
-		return nil, fmt.Errorf("quota: all member limits: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	out := make(map[string]domainquota.Limits)
-	for rows.Next() {
+	err := queryEach(ctx, r.db, "quota: all member limits", func(sc rowScanner) error {
 		var id string
 		var l domainquota.Limits
-		if err := rows.Scan(&id, &l.Daily, &l.Weekly, &l.Monthly); err != nil {
-			return nil, fmt.Errorf("quota: scan member limits: %w", err)
+		if err := sc.Scan(&id, &l.Daily, &l.Weekly, &l.Monthly); err != nil {
+			return err
 		}
 		out[id] = l
+		return nil
+	}, "SELECT member_id, daily_limit, weekly_limit, monthly_limit FROM member_token_limits WHERE daily_limit > 0 OR weekly_limit > 0 OR monthly_limit > 0")
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // DefaultLimits 는 전역 기본 한도를 반환한다.
@@ -169,19 +161,18 @@ func (r *QuotaRepository) SetDefaultLimits(ctx context.Context, l domainquota.Li
 
 // scanMap 은 (member_id, int) 2컬럼 결과를 맵으로 스캔한다.
 func (r *QuotaRepository) scanMap(ctx context.Context, query string, args ...any) (map[string]int, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("quota: query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	out := make(map[string]int)
-	for rows.Next() {
+	err := queryEach(ctx, r.db, "quota", func(sc rowScanner) error {
 		var id string
 		var v int
-		if err := rows.Scan(&id, &v); err != nil {
-			return nil, fmt.Errorf("quota: scan: %w", err)
+		if err := sc.Scan(&id, &v); err != nil {
+			return err
 		}
 		out[id] = v
+		return nil
+	}, query, args...)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }

@@ -152,6 +152,7 @@ type ChatMessage struct {
 // 모델별로 받는 형식이 다르다는 점이 핵심이다:
 //   - Type="adaptive": Opus 4.x/Sonnet 5/Fable 5 등 최신 모델(budget_tokens 는 이들에서 거부됨).
 //   - Type="enabled" + BudgetTokens: Claude 3.7/구형 사고 모델.
+//
 // 서버는 모델 능력을 추측하지 않는다(중계기 원칙) — 클라이언트가 자기 모델에 맞는 형식을 지정하고,
 // 안 맞으면 Anthropic 이 400 을 돌려주며 그대로 사용자에게 표면화된다.
 type ThinkingConfig struct {

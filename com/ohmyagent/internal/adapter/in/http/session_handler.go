@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainchatsession "aiagent/com/ohmyagent/internal/domain/chatsession"
 )
 
@@ -23,24 +22,18 @@ func NewSessionHandler(svc domainchatsession.Service) *SessionHandler {
 // --- GET /api/v1/agent/sessions ---
 
 func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	summaries, err := h.svc.List(r.Context(), claims.MemberID)
+	summaries, err := h.svc.List(r.Context(), actorID(r))
 	if err != nil {
 		return sessionErrToHTTP(err)
 	}
-	items := make([]sessionSummaryDTO, 0, len(summaries))
-	for _, s := range summaries {
-		items = append(items, sessionSummaryDTO{ID: s.ID, Title: s.Title, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt})
-	}
-	writeJSON(w, http.StatusOK, sessionsListResp{Sessions: items})
+	writeJSON(w, http.StatusOK, sessionsListResp{Sessions: mapSlice(summaries, toSessionSummaryDTO)})
 	return nil
 }
 
 // --- GET /api/v1/agent/sessions/{id} ---
 
 func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	s, err := h.svc.Get(r.Context(), claims.MemberID, r.PathValue("id"))
+	s, err := h.svc.Get(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return sessionErrToHTTP(err)
 	}
@@ -51,15 +44,13 @@ func (h *SessionHandler) Get(w http.ResponseWriter, r *http.Request) error {
 // --- PUT /api/v1/agent/sessions/{id} ---
 
 func (h *SessionHandler) Upsert(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req upsertSessionReq
-	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+	req, err := bindJSON[upsertSessionReq](w, r, maxLargeJSONBytes)
+	if err != nil {
 		return err
 	}
 	s, err := h.svc.Upsert(r.Context(), domainchatsession.UpsertCommand{
 		ID:      r.PathValue("id"),
-		OwnerID: claims.MemberID,
+		OwnerID: actorID(r),
 		Title:   req.Title,
 		Data:    []byte(req.Data),
 	})
@@ -73,8 +64,7 @@ func (h *SessionHandler) Upsert(w http.ResponseWriter, r *http.Request) error {
 // --- DELETE /api/v1/agent/sessions/{id} ---
 
 func (h *SessionHandler) Delete(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.Delete(r.Context(), claims.MemberID, r.PathValue("id")); err != nil {
+	if err := h.svc.Delete(r.Context(), actorID(r), r.PathValue("id")); err != nil {
 		return sessionErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusNoContent, nil)
@@ -107,6 +97,10 @@ type sessionResp struct {
 type upsertSessionReq struct {
 	Title string          `json:"title"`
 	Data  json.RawMessage `json:"data"`
+}
+
+func toSessionSummaryDTO(s domainchatsession.Summary) sessionSummaryDTO {
+	return sessionSummaryDTO{ID: s.ID, Title: s.Title, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
 }
 
 func toSessionResp(s domainchatsession.Session) sessionResp {

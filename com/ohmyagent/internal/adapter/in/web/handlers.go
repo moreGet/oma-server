@@ -162,6 +162,26 @@ func actorID(r *http.Request) string {
 	return claims.MemberID
 }
 
+// abortTo 는 페이지 로드 실패의 공통 마무리다: 오류 플래시 후 대체 경로로 리다이렉트.
+// msg 가 비면 도메인 에러를 친화 메시지로 매핑한다.
+func (s *Server) abortTo(w http.ResponseWriter, r *http.Request, err error, msg, path string) {
+	if msg == "" {
+		msg = webErrorMessage(err)
+	}
+	s.setFlashError(w, msg)
+	s.redirect(w, r, basePath+path)
+}
+
+// testResult 는 외부 저장소 연결 테스트의 공통 마무리다(성공/실패 플래시 후 설정 페이지로).
+func (s *Server) testResult(w http.ResponseWriter, r *http.Request, err error, path string) {
+	if err != nil {
+		s.setFlashError(w, "연결 테스트 실패: "+err.Error())
+	} else {
+		s.setFlash(w, "연결 테스트에 성공했습니다.")
+	}
+	s.redirect(w, r, basePath+path)
+}
+
 // --- 로그인 / 로그아웃 ---
 
 func (s *Server) renderLogin(w http.ResponseWriter, status int, errMsg string) {
@@ -250,8 +270,7 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "멤버 관리", "members")
 	members, _, err := s.auth.ListMembers(r.Context(), actorID(r), domainauth.MemberFilter{Limit: membersPageLimit})
 	if err != nil {
-		s.setFlashError(w, "멤버 목록을 볼 권한이 없습니다.")
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "멤버 목록을 볼 권한이 없습니다.", "/")
 		return
 	}
 	// 역할 드롭다운은 actor 가 제어 가능한(자기보다 낮은 레벨) 역할만 노출한다.
@@ -399,6 +418,34 @@ func (s *Server) memberResetQuota(w http.ResponseWriter, r *http.Request) {
 	s.flashRedirect(w, r, err, "사용량을 초기화했습니다.", "/members")
 }
 
+// storageForm 은 파일/S3 백엔드 설정 폼의 공통 필드다.
+// 대화 이력 저장·세션 저장 화면이 같은 입력 폼을 쓰므로 필드명 해석을 한곳에 모은다
+// (폼 필드를 고칠 때 두 핸들러가 갈라지지 않도록).
+type storageForm struct {
+	Backend     string
+	FileDir     string
+	S3Endpoint  string
+	S3Bucket    string
+	S3Region    string
+	S3AccessKey string
+	S3SecretKey string
+	S3UseSSL    bool
+}
+
+// readStorageForm 은 백엔드 공통 필드를 폼에서 읽는다.
+func readStorageForm(r *http.Request) storageForm {
+	return storageForm{
+		Backend:     r.FormValue("backend"),
+		FileDir:     r.FormValue("file_dir"),
+		S3Endpoint:  r.FormValue("s3_endpoint"),
+		S3Bucket:    r.FormValue("s3_bucket"),
+		S3Region:    r.FormValue("s3_region"),
+		S3AccessKey: r.FormValue("s3_access_key"),
+		S3SecretKey: r.FormValue("s3_secret_key"),
+		S3UseSSL:    r.FormValue("s3_use_ssl") == "on",
+	}
+}
+
 // formLimits 는 폼에서 일/주/월 한도를 읽는다(빈/비정상 값은 0).
 func formLimits(r *http.Request) domainquota.Limits {
 	d, _ := strconv.Atoi(r.FormValue("daily_limit"))
@@ -416,8 +463,7 @@ func (s *Server) providersPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "LLM Provider", "providers")
 	providers, err := s.providers.List(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlashError(w, "Provider 목록을 불러오지 못했습니다.")
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "Provider 목록을 불러오지 못했습니다.", "/")
 		return
 	}
 	pd.Data = providersView{
@@ -530,8 +576,7 @@ func (s *Server) transcriptsPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "대화 이력 저장", "transcripts")
 	settings, hasSecret, err := s.transcripts.GetSettings(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "", "/")
 		return
 	}
 	pd.Data = transcriptView{
@@ -546,18 +591,19 @@ func (s *Server) transcriptsPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) transcriptsUpdate(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	retentionDays, _ := strconv.Atoi(r.FormValue("retention_days"))
+	f := readStorageForm(r)
 	err := s.transcripts.UpdateSettings(r.Context(), domaintranscript.UpdateCommand{
 		ActorID: actorID(r),
 		Settings: domaintranscript.Settings{
 			Enabled:          r.FormValue("enabled") == "on",
-			Backend:          domaintranscript.Backend(r.FormValue("backend")),
-			FileDir:          r.FormValue("file_dir"),
-			S3Endpoint:       r.FormValue("s3_endpoint"),
-			S3Bucket:         r.FormValue("s3_bucket"),
-			S3Region:         r.FormValue("s3_region"),
-			S3AccessKey:      r.FormValue("s3_access_key"),
-			S3SecretKey:      r.FormValue("s3_secret_key"),
-			S3UseSSL:         r.FormValue("s3_use_ssl") == "on",
+			Backend:          domaintranscript.Backend(f.Backend),
+			FileDir:          f.FileDir,
+			S3Endpoint:       f.S3Endpoint,
+			S3Bucket:         f.S3Bucket,
+			S3Region:         f.S3Region,
+			S3AccessKey:      f.S3AccessKey,
+			S3SecretKey:      f.S3SecretKey,
+			S3UseSSL:         f.S3UseSSL,
 			RetentionDays:    retentionDays,
 			StripAttachments: r.FormValue("strip_attachments") == "on",
 		},
@@ -566,12 +612,7 @@ func (s *Server) transcriptsUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) transcriptsTest(w http.ResponseWriter, r *http.Request) {
-	if err := s.transcripts.TestConnection(r.Context(), actorID(r)); err != nil {
-		s.setFlashError(w, "연결 테스트 실패: "+err.Error())
-	} else {
-		s.setFlash(w, "연결 테스트에 성공했습니다.")
-	}
-	s.redirect(w, r, basePath+"/transcripts")
+	s.testResult(w, r, s.transcripts.TestConnection(r.Context(), actorID(r)), "/transcripts")
 }
 
 // --- 세션(대화) 저장 설정 ---
@@ -592,8 +633,7 @@ func (s *Server) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "세션 저장", "sessions")
 	settings, hasSecret, err := s.sessions.GetSettings(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "", "/")
 		return
 	}
 	pd.Data = sessionView{
@@ -608,17 +648,18 @@ func (s *Server) sessionsPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) sessionsUpdate(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	maxSessions, _ := strconv.Atoi(r.FormValue("default_max_sessions"))
+	f := readStorageForm(r)
 	err := s.sessions.UpdateSettings(r.Context(), domainproject.UpdateSettingsCommand{
 		ActorID: actorID(r),
 		Settings: domainproject.Settings{
-			Backend:            domainproject.Backend(r.FormValue("backend")),
-			FileDir:            r.FormValue("file_dir"),
-			S3Endpoint:         r.FormValue("s3_endpoint"),
-			S3Bucket:           r.FormValue("s3_bucket"),
-			S3Region:           r.FormValue("s3_region"),
-			S3AccessKey:        r.FormValue("s3_access_key"),
-			S3SecretKey:        r.FormValue("s3_secret_key"),
-			S3UseSSL:           r.FormValue("s3_use_ssl") == "on",
+			Backend:            domainproject.Backend(f.Backend),
+			FileDir:            f.FileDir,
+			S3Endpoint:         f.S3Endpoint,
+			S3Bucket:           f.S3Bucket,
+			S3Region:           f.S3Region,
+			S3AccessKey:        f.S3AccessKey,
+			S3SecretKey:        f.S3SecretKey,
+			S3UseSSL:           f.S3UseSSL,
 			DefaultMaxSessions: maxSessions,
 		},
 	})
@@ -626,12 +667,7 @@ func (s *Server) sessionsUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sessionsTest(w http.ResponseWriter, r *http.Request) {
-	if err := s.sessions.TestConnection(r.Context(), actorID(r)); err != nil {
-		s.setFlashError(w, "연결 테스트 실패: "+err.Error())
-	} else {
-		s.setFlash(w, "연결 테스트에 성공했습니다.")
-	}
-	s.redirect(w, r, basePath+"/sessions")
+	s.testResult(w, r, s.sessions.TestConnection(r.Context(), actorID(r)), "/sessions")
 }
 
 // --- 클라이언트 버전(/admin/client) ---
@@ -650,8 +686,7 @@ func (s *Server) clientPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "클라이언트 버전", "client")
 	st, err := s.clientVersion.GetSettings(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "", "/")
 		return
 	}
 	pd.Data = clientVersionView{
@@ -703,8 +738,7 @@ func (s *Server) agentsPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "에이전트", "agents")
 	list, err := s.agents.AdminList(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "", "/")
 		return
 	}
 	v := agentsView{Agents: make([]agentRow, 0, len(list))}
@@ -802,8 +836,7 @@ func (s *Server) chatPage(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := s.chat.AdminStats(r.Context())
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "", "/")
 		return
 	}
 	rooms, _ := s.chat.AdminListRooms(r.Context(), adminRoomListLimit)
@@ -830,8 +863,7 @@ func (s *Server) chatRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	room, members, msgs, err := s.chat.AdminRoomDetail(r.Context(), r.PathValue("id"))
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/chat")
+		s.abortTo(w, r, err, "", "/chat")
 		return
 	}
 	rv := chatRoomView{ID: room.ID, Type: string(room.Type), Name: roomLabel(string(room.Type), room.Name), Members: members}
@@ -920,8 +952,7 @@ func (s *Server) toolsPage(w http.ResponseWriter, r *http.Request) {
 	pd := s.base(r, w, "도구 정책", "tools")
 	st, err := s.toolPolicy.GetSettings(r.Context(), actorID(r))
 	if err != nil {
-		s.setFlashError(w, webErrorMessage(err))
-		s.redirect(w, r, basePath+"/")
+		s.abortTo(w, r, err, "", "/")
 		return
 	}
 	pd.Data = toolPolicyView{
@@ -1005,8 +1036,8 @@ func parseToolEditorForm(r *http.Request) (enabled, disabled []string) {
 
 func (s *Server) toolsUpdate(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	patterns, perr := parseBlockedPatterns(r.FormValue("blocked_patterns"))
-	paths, qerr := parseBlockedPaths(r.FormValue("blocked_paths"))
+	patterns, perr := parseJSONList[domaintoolpolicy.BlockedPattern](r.FormValue("blocked_patterns"))
+	paths, qerr := parseJSONList[domaintoolpolicy.BlockedPath](r.FormValue("blocked_paths"))
 	if perr != nil || qerr != nil {
 		s.setFlashError(w, "차단 패턴/경로 JSON 형식 오류 — 입력을 확인하세요.")
 		s.redirect(w, r, basePath+"/tools")
@@ -1039,24 +1070,12 @@ func splitLines(s string) []string {
 	return out
 }
 
-// parseBlockedPatterns 는 JSON 텍스트(빈 값=없음)를 패턴 슬라이스로 파싱한다.
-func parseBlockedPatterns(s string) ([]domaintoolpolicy.BlockedPattern, error) {
+// parseJSONList 는 JSON 배열 텍스트(빈 값=없음)를 슬라이스로 파싱한다(차단 패턴·경로 공용).
+func parseJSONList[T any](s string) ([]T, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, nil
 	}
-	var out []domaintoolpolicy.BlockedPattern
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// parseBlockedPaths 는 JSON 텍스트(빈 값=없음)를 경로 슬라이스로 파싱한다.
-func parseBlockedPaths(s string) ([]domaintoolpolicy.BlockedPath, error) {
-	if strings.TrimSpace(s) == "" {
-		return nil, nil
-	}
-	var out []domaintoolpolicy.BlockedPath
+	var out []T
 	if err := json.Unmarshal([]byte(s), &out); err != nil {
 		return nil, err
 	}
@@ -1064,16 +1083,9 @@ func parseBlockedPaths(s string) ([]domaintoolpolicy.BlockedPath, error) {
 }
 
 // marshalIndent 는 슬라이스를 보기 좋은 JSON 텍스트로 직렬화한다(빈 슬라이스는 빈 문자열).
-func marshalIndent(v any) string {
-	switch t := v.(type) {
-	case []domaintoolpolicy.BlockedPattern:
-		if len(t) == 0 {
-			return ""
-		}
-	case []domaintoolpolicy.BlockedPath:
-		if len(t) == 0 {
-			return ""
-		}
+func marshalIndent[T any](v []T) string {
+	if len(v) == 0 {
+		return ""
 	}
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

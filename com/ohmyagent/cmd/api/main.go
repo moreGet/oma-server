@@ -166,7 +166,7 @@ func run() error {
 		return err
 	}
 	providerUC := llmproviderapp.NewProviderService(providerRepo, providerCache, providerFactory, providerCipher, authUC)
-	chatUC := chatapp.NewChatService(providerUC)    // providerUC 가 활성 어댑터 resolver 를 충족
+	chatUC := chatapp.NewChatService(providerUC) // providerUC 가 활성 어댑터 resolver 를 충족
 	// 에이전트 루프(tools/function-calling) 중계. 도구 정책은 요청 게이트로 강제한다
 	// (차단 도구가 실리면 403 — 모델에 스키마 자체를 넘기지 않는다).
 	agentUC := agentapp.NewAgentService(providerUC, toolPolicyManager)

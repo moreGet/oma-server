@@ -3,7 +3,6 @@ package httpin
 import (
 	"net/http"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
 )
 
@@ -31,8 +30,7 @@ type modelsResp struct {
 
 // List 는 모델 목록을 반환한다(MinRole user).
 func (h *ModelsHandler) List(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	providers, err := h.svc.List(r.Context(), claims.MemberID)
+	providers, err := h.svc.List(r.Context(), actorID(r))
 	if err != nil {
 		return providerErrToHTTP(err)
 	}

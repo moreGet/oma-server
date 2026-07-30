@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 )
 
@@ -20,9 +19,8 @@ func NewAuthHandler(svc domainauth.Service) *AuthHandler { return &AuthHandler{s
 // --- POST /api/v1/auth/login ---
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req loginReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[loginReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	token, member, err := h.svc.Login(r.Context(), domainauth.LoginCommand{
@@ -39,7 +37,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) error {
 // --- GET /api/v1/members ---
 
 func (h *AuthHandler) ListMembers(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	q := r.URL.Query()
 	limit := clampLimit(atoiDefault(q.Get("limit"), defaultPageLimit))
 	offset := atoiDefault(q.Get("offset"), 0)
@@ -48,24 +45,19 @@ func (h *AuthHandler) ListMembers(w http.ResponseWriter, r *http.Request) error 
 		Limit:  limit,
 		Offset: offset,
 	}
-	members, total, err := h.svc.ListMembers(r.Context(), claims.MemberID, filter)
+	members, total, err := h.svc.ListMembers(r.Context(), actorID(r), filter)
 	if err != nil {
 		return authErrToHTTP(err)
 	}
-	items := make([]memberResp, 0, len(members))
-	for _, m := range members {
-		items = append(items, toMemberResp(m))
-	}
-	writeJSON(w, http.StatusOK, memberListResp{Total: total, Limit: limit, Offset: offset, Items: items})
+	writeJSON(w, http.StatusOK, memberListResp{Total: total, Limit: limit, Offset: offset, Items: mapSlice(members, toMemberResp)})
 	return nil
 }
 
 // --- GET /api/v1/members/{id} ---
 
 func (h *AuthHandler) GetMember(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	id := r.PathValue("id")
-	member, err := h.svc.GetMember(r.Context(), claims.MemberID, id)
+	member, err := h.svc.GetMember(r.Context(), actorID(r), id)
 	if err != nil {
 		return authErrToHTTP(err)
 	}
@@ -76,17 +68,15 @@ func (h *AuthHandler) GetMember(w http.ResponseWriter, r *http.Request) error {
 // --- POST /api/v1/members ---
 
 func (h *AuthHandler) CreateMember(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req createMemberReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[createMemberReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	member, err := h.svc.CreateMember(r.Context(), domainauth.CreateMemberCommand{
 		Username: req.Username,
 		Password: req.Password,
 		RoleID:   req.RoleID,
-		ActorID:  claims.MemberID,
+		ActorID:  actorID(r),
 	})
 	if err != nil {
 		return authErrToHTTP(err)
@@ -98,14 +88,12 @@ func (h *AuthHandler) CreateMember(w http.ResponseWriter, r *http.Request) error
 // --- PUT /api/v1/members/{id}/role ---
 
 func (h *AuthHandler) ChangeRole(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req changeRoleReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[changeRoleReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	member, err := h.svc.ChangeRole(r.Context(), domainauth.ChangeRoleCommand{
-		ActorID:  claims.MemberID,
+		ActorID:  actorID(r),
 		TargetID: r.PathValue("id"),
 		RoleID:   req.RoleID,
 	})
@@ -119,14 +107,12 @@ func (h *AuthHandler) ChangeRole(w http.ResponseWriter, r *http.Request) error {
 // --- PUT /api/v1/members/{id}/active ---
 
 func (h *AuthHandler) SetActive(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req setActiveReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[setActiveReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	member, err := h.svc.SetActive(r.Context(), domainauth.SetActiveCommand{
-		ActorID:  claims.MemberID,
+		ActorID:  actorID(r),
 		TargetID: r.PathValue("id"),
 		Active:   req.Active,
 	})
@@ -140,8 +126,7 @@ func (h *AuthHandler) SetActive(w http.ResponseWriter, r *http.Request) error {
 // --- DELETE /api/v1/members/{id} ---
 
 func (h *AuthHandler) DeleteMember(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.DeleteMember(r.Context(), claims.MemberID, r.PathValue("id")); err != nil {
+	if err := h.svc.DeleteMember(r.Context(), actorID(r), r.PathValue("id")); err != nil {
 		return authErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusNoContent, nil)
@@ -151,8 +136,7 @@ func (h *AuthHandler) DeleteMember(w http.ResponseWriter, r *http.Request) error
 // --- GET /api/v1/me ---
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	member, err := h.svc.GetMember(r.Context(), claims.MemberID, claims.MemberID)
+	member, err := h.svc.GetMember(r.Context(), actorID(r), actorID(r))
 	if err != nil {
 		return authErrToHTTP(err)
 	}
@@ -172,8 +156,7 @@ type userProfileResp struct {
 // Profile 은 로그인 사용자 프로필을 반환한다(client 계약).
 // display_name 은 별도 표시명이 없으면 username 으로 폴백, organization/email 은 미보유 시 null.
 func (h *AuthHandler) Profile(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	member, err := h.svc.GetMember(r.Context(), claims.MemberID, claims.MemberID)
+	member, err := h.svc.GetMember(r.Context(), actorID(r), actorID(r))
 	if err != nil {
 		return authErrToHTTP(err)
 	}
@@ -197,13 +180,11 @@ func strPtrOrNil(s string) *string {
 // --- PUT /api/v1/me/password ---
 
 func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req changePasswordReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[changePasswordReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	if err := h.svc.ChangePassword(r.Context(), claims.MemberID, req.OldPassword, req.NewPassword); err != nil {
+	if err := h.svc.ChangePassword(r.Context(), actorID(r), req.OldPassword, req.NewPassword); err != nil {
 		return authErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusOK, messageResp{Message: "password changed"})
@@ -213,13 +194,11 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) err
 // --- PUT /api/v1/members/{id}/password (admin↑ 가 하위 멤버 리셋) ---
 
 func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req resetPasswordReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[resetPasswordReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	if err := h.svc.ResetPassword(r.Context(), claims.MemberID, r.PathValue("id"), req.NewPassword); err != nil {
+	if err := h.svc.ResetPassword(r.Context(), actorID(r), r.PathValue("id"), req.NewPassword); err != nil {
 		return authErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusOK, messageResp{Message: "password reset"})
@@ -233,11 +212,7 @@ func (h *AuthHandler) ListRoles(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return authErrToHTTP(err)
 	}
-	items := make([]roleResp, 0, len(roles))
-	for _, role := range roles {
-		items = append(items, roleResp{ID: role.ID, Name: role.Name, Level: int(role.Level)})
-	}
-	writeJSON(w, http.StatusOK, rolesResp{Roles: items})
+	writeJSON(w, http.StatusOK, rolesResp{Roles: mapSlice(roles, toRoleResp)})
 	return nil
 }
 
@@ -316,6 +291,11 @@ func toMemberResp(m domainauth.Member) memberResp {
 		CreatedBy: m.CreatedBy,
 		UpdatedBy: m.UpdatedBy,
 	}
+}
+
+// toRoleResp 는 도메인 Role 을 응답 DTO 로 변환한다.
+func toRoleResp(r domainauth.Role) roleResp {
+	return roleResp{ID: r.ID, Name: r.Name, Level: int(r.Level)}
 }
 
 // authErrToHTTP 는 auth 도메인 에러를 AppError 로 매핑한다.

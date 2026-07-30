@@ -41,23 +41,16 @@ func (r *ConversationRepository) UpsertConversation(ctx context.Context, c domai
 }
 
 func (r *ConversationRepository) ListByProject(ctx context.Context, ownerID, projectID string) ([]domainproject.Conversation, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT id, client_id, title, created_utc, updated_utc, message_count FROM conversations WHERE owner_id=? AND project_id=? ORDER BY updated_utc DESC", ownerID, projectID)
-	if err != nil {
-		return nil, fmt.Errorf("conversation: list: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainproject.Conversation
-	for rows.Next() {
+	return queryList(ctx, r.db, "conversation: list", func(sc rowScanner) (domainproject.Conversation, error) {
 		c := domainproject.Conversation{OwnerID: ownerID, ProjectID: projectID}
 		var createdUnix, updatedUnix int64
-		if err := rows.Scan(&c.ID, &c.ClientID, &c.Title, &createdUnix, &updatedUnix, &c.MessageCount); err != nil {
-			return nil, fmt.Errorf("conversation: scan: %w", err)
+		if err := sc.Scan(&c.ID, &c.ClientID, &c.Title, &createdUnix, &updatedUnix, &c.MessageCount); err != nil {
+			return domainproject.Conversation{}, err
 		}
 		c.CreatedUTC = time.Unix(createdUnix, 0).UTC()
 		c.UpdatedUTC = time.Unix(updatedUnix, 0).UTC()
-		out = append(out, c)
-	}
-	return out, rows.Err()
+		return c, nil
+	}, "SELECT id, client_id, title, created_utc, updated_utc, message_count FROM conversations WHERE owner_id=? AND project_id=? ORDER BY updated_utc DESC", ownerID, projectID)
 }
 
 func (r *ConversationRepository) CountByOwner(ctx context.Context, ownerID string) (int, error) {

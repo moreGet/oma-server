@@ -50,10 +50,7 @@ func (a *GeminiAdapter) ProviderType() domainllmprovider.ProviderType {
 // resolveGeminiModel 은 사용할 모델명을 고른다.
 // 모델은 서버(관리자)의 Provider 설정으로만 정해지며 클라이언트 요청은 무시한다.
 func (a *GeminiAdapter) resolveGeminiModel(_ string) string {
-	if a.model != "" {
-		return a.model
-	}
-	return defaultGeminiModel
+	return modelOrDefault(a.model, defaultGeminiModel)
 }
 
 // ChatStream 은 GenerateContentStream 을 호출해 텍스트 델타는 즉시 onChunk 로 흘리고, FunctionCall 은 누적해 마지막 Done 조각에 담는다.

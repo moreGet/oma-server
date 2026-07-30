@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 )
 
 // 에러 코드 상수(스펙 §5.2). AppError.Code 와 HTTPStatus() 매핑이 공유한다.
@@ -49,6 +51,32 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any)
 		return ErrBadRequest("invalid request body")
 	}
 	return nil
+}
+
+// bindJSON 은 요청 본문을 T 로 디코딩하고 본문을 닫는다(쓰기 계열 핸들러의 공통 프리앰블).
+// 디코딩 이후 본문을 다시 읽는 핸들러는 없으므로 여기서 바로 닫는다.
+func bindJSON[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, error) {
+	defer func() { _ = r.Body.Close() }()
+	var req T
+	if err := decodeJSON(w, r, maxBytes, &req); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+// actorID 는 인증 클레임에서 호출자 멤버 ID 를 꺼낸다(미인증 경로는 빈 문자열).
+func actorID(r *http.Request) string {
+	claims, _ := security.ClaimsFrom(r.Context())
+	return claims.MemberID
+}
+
+// mapSlice 는 도메인 슬라이스를 원소별 변환으로 응답 DTO 슬라이스에 담는다(nil 대신 빈 슬라이스).
+func mapSlice[T, U any](in []T, conv func(T) U) []U {
+	out := make([]U, 0, len(in))
+	for _, v := range in {
+		out = append(out, conv(v))
+	}
+	return out
 }
 
 // HandlerFunc 는 error 를 반환하는 핸들러 시그니처다.

@@ -3,8 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"strings"
 
 	domainagentregistry "aiagent/com/ohmyagent/internal/domain/agentregistry"
 	domainmessaging "aiagent/com/ohmyagent/internal/domain/messaging"
@@ -31,29 +29,18 @@ func (r *MemberDirectoryRepository) NamesByIDs(ctx context.Context, ids []string
 	if len(ids) == 0 {
 		return out, nil
 	}
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	query := "SELECT id, username, display_name FROM members WHERE id IN (" + strings.Join(placeholders, ",") + ")"
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("member directory: query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
+	placeholders, args := inPlaceholders(ids)
+	err := queryEach(ctx, r.db, "member directory", func(sc rowScanner) error {
 		var id, username string
 		var displayName sql.NullString
-		if err := rows.Scan(&id, &username, &displayName); err != nil {
-			return nil, fmt.Errorf("member directory: scan: %w", err)
+		if err := sc.Scan(&id, &username, &displayName); err != nil {
+			return err
 		}
 		out[id] = domainmessaging.MemberInfo{ID: id, Username: username, DisplayName: displayName.String}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("member directory: rows: %w", err)
+		return nil
+	}, "SELECT id, username, display_name FROM members WHERE id IN ("+placeholders+")", args...)
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

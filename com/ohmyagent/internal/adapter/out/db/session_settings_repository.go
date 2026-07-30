@@ -100,19 +100,18 @@ func (r *MemberSessionLimitRepository) Set(ctx context.Context, memberID string,
 }
 
 func (r *MemberSessionLimitRepository) All(ctx context.Context) (map[string]int, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT member_id, max_sessions FROM member_session_limits WHERE max_sessions > 0")
-	if err != nil {
-		return nil, fmt.Errorf("session limit: all: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	out := make(map[string]int)
-	for rows.Next() {
+	err := queryEach(ctx, r.db, "session limit: all", func(sc rowScanner) error {
 		var id string
 		var m int
-		if err := rows.Scan(&id, &m); err != nil {
-			return nil, fmt.Errorf("session limit: scan: %w", err)
+		if err := sc.Scan(&id, &m); err != nil {
+			return err
 		}
 		out[id] = m
+		return nil
+	}, "SELECT member_id, max_sessions FROM member_session_limits WHERE max_sessions > 0")
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }

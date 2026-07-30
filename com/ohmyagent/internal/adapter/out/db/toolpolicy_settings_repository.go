@@ -3,10 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	domaintoolpolicy "aiagent/com/ohmyagent/internal/domain/toolpolicy"
 )
@@ -45,10 +43,10 @@ func (r *ToolPolicyRepository) Get(ctx context.Context) (domaintoolpolicy.Settin
 	}
 	return domaintoolpolicy.Settings{
 		Mode:            domaintoolpolicy.NormMode(mode),
-		Enabled:         decodeStringList(enabled.String),
-		Disabled:        decodeStringList(disabled.String),
-		BlockedPatterns: decodePatternList(patterns.String),
-		BlockedPaths:    decodePathList(paths.String),
+		Enabled:         decodeJSONList[string](enabled.String),
+		Disabled:        decodeJSONList[string](disabled.String),
+		BlockedPatterns: decodeJSONList[domaintoolpolicy.BlockedPattern](patterns.String),
+		BlockedPaths:    decodeJSONList[domaintoolpolicy.BlockedPath](paths.String),
 		UpdatedAt:       updatedAt,
 		UpdatedBy:       updatedBy.String,
 	}, nil
@@ -56,10 +54,10 @@ func (r *ToolPolicyRepository) Get(ctx context.Context) (domaintoolpolicy.Settin
 
 // Save 는 정책을 upsert(UPDATE id=1 → 없으면 INSERT) 한다(드라이버 무관 portable upsert).
 func (r *ToolPolicyRepository) Save(ctx context.Context, s domaintoolpolicy.Settings) error {
-	enabled := encodeList(s.Enabled)
-	disabled := encodeList(s.Disabled)
-	patterns := encodePatterns(s.BlockedPatterns)
-	paths := encodePaths(s.BlockedPaths)
+	enabled := encodeJSONList(s.Enabled)
+	disabled := encodeJSONList(s.Disabled)
+	patterns := encodeJSONList(s.BlockedPatterns)
+	paths := encodeJSONList(s.BlockedPaths)
 
 	res, err := r.db.ExecContext(ctx,
 		"UPDATE tool_policy_settings SET mode=?, enabled=?, disabled=?, blocked_patterns=?, blocked_paths=?, updated_at=?, updated_by=? WHERE id=1",
@@ -76,72 +74,4 @@ func (r *ToolPolicyRepository) Save(ctx context.Context, s domaintoolpolicy.Sett
 		return fmt.Errorf("toolpolicy: insert: %w", err)
 	}
 	return nil
-}
-
-// --- JSON 인코딩/디코딩(빈 슬라이스는 빈 문자열=NULL 의미로 저장) ---
-
-func encodeList(v []string) string {
-	if len(v) == 0 {
-		return ""
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
-func encodePatterns(v []domaintoolpolicy.BlockedPattern) string {
-	if len(v) == 0 {
-		return ""
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
-func encodePaths(v []domaintoolpolicy.BlockedPath) string {
-	if len(v) == 0 {
-		return ""
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
-func decodeStringList(s string) []string {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	var out []string
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil
-	}
-	return out
-}
-
-func decodePatternList(s string) []domaintoolpolicy.BlockedPattern {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	var out []domaintoolpolicy.BlockedPattern
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil
-	}
-	return out
-}
-
-func decodePathList(s string) []domaintoolpolicy.BlockedPath {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	var out []domaintoolpolicy.BlockedPath
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil
-	}
-	return out
 }

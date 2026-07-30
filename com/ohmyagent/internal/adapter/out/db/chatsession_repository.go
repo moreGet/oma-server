@@ -25,33 +25,24 @@ func NewChatSessionRepository(conn *sql.DB) *ChatSessionRepository {
 
 const sessionColumns = "id, owner_id, title, data_json, created_at, updated_at"
 
+// scanSessionSummary 는 한 행을 세션 요약으로 스캔한다(unix 초 → UTC 시각).
+func scanSessionSummary(sc rowScanner) (domainchatsession.Summary, error) {
+	var (
+		s                    domainchatsession.Summary
+		createdAt, updatedAt int64
+	)
+	if err := sc.Scan(&s.ID, &s.Title, &createdAt, &updatedAt); err != nil {
+		return domainchatsession.Summary{}, err
+	}
+	s.CreatedAt = time.Unix(createdAt, 0).UTC()
+	s.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+	return s, nil
+}
+
 // ListByOwner 는 소유자의 세션 요약 목록을 최신순으로 반환한다.
 func (r *ChatSessionRepository) ListByOwner(ctx context.Context, ownerID string) ([]domainchatsession.Summary, error) {
-	rows, err := r.db.QueryContext(ctx,
+	return queryList(ctx, r.db, "list sessions", scanSessionSummary,
 		"SELECT id, title, created_at, updated_at FROM chat_sessions WHERE owner_id=? ORDER BY updated_at DESC", ownerID)
-	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]domainchatsession.Summary, 0)
-	for rows.Next() {
-		var (
-			s         domainchatsession.Summary
-			createdAt int64
-			updatedAt int64
-		)
-		if err := rows.Scan(&s.ID, &s.Title, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scan session summary: %w", err)
-		}
-		s.CreatedAt = time.Unix(createdAt, 0).UTC()
-		s.UpdatedAt = time.Unix(updatedAt, 0).UTC()
-		out = append(out, s)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sessions: %w", err)
-	}
-	return out, nil
 }
 
 // Get 은 소유자 스코프 단건 조회. 없거나 타인 소유면 ErrNotFound.

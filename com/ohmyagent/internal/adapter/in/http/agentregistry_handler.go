@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainagentregistry "aiagent/com/ohmyagent/internal/domain/agentregistry"
 )
 
@@ -96,14 +95,12 @@ func toAgentResp(a domainagentregistry.Agent) agentResp {
 // Register 는 POST /api/v1/agents/register — (owner, name) 업서트 등록.
 // 재등록도 같은 응답 형태이므로 상태코드는 일관되게 200 을 쓴다(업서트 시맨틱).
 func (h *AgentRegistryHandler) Register(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-	var req agentRegisterReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[agentRegisterReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
 	a, err := h.svc.Register(r.Context(), domainagentregistry.RegisterCommand{
-		OwnerID:      claims.MemberID,
+		OwnerID:      actorID(r),
 		Name:         req.Name,
 		EndpointURL:  req.EndpointURL,
 		Capabilities: req.Capabilities,
@@ -124,8 +121,7 @@ func (h *AgentRegistryHandler) Register(w http.ResponseWriter, r *http.Request) 
 
 // Heartbeat 은 POST /api/v1/agents/{id}/heartbeat — 생존 신호(소유자만).
 func (h *AgentRegistryHandler) Heartbeat(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.Heartbeat(r.Context(), r.PathValue("id"), claims.MemberID); err != nil {
+	if err := h.svc.Heartbeat(r.Context(), r.PathValue("id"), actorID(r)); err != nil {
 		return agentRegistryErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusOK, agentHeartbeatResp{
@@ -137,8 +133,7 @@ func (h *AgentRegistryHandler) Heartbeat(w http.ResponseWriter, r *http.Request)
 
 // Deregister 는 DELETE /api/v1/agents/{id} — 우아한 해제(소유자만). 204.
 func (h *AgentRegistryHandler) Deregister(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.Deregister(r.Context(), r.PathValue("id"), claims.MemberID); err != nil {
+	if err := h.svc.Deregister(r.Context(), r.PathValue("id"), actorID(r)); err != nil {
 		return agentRegistryErrToHTTP(err)
 	}
 	writeJSON(w, http.StatusNoContent, nil)
@@ -158,11 +153,7 @@ func (h *AgentRegistryHandler) List(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return agentRegistryErrToHTTP(err)
 	}
-	resp := agentListResp{Agents: make([]agentResp, 0, len(agents))}
-	for _, a := range agents {
-		resp.Agents = append(resp.Agents, toAgentResp(a))
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, agentListResp{Agents: mapSlice(agents, toAgentResp)})
 	return nil
 }
 
@@ -179,8 +170,7 @@ func (h *AgentRegistryHandler) Get(w http.ResponseWriter, r *http.Request) error
 // MintToken 은 POST /api/v1/agents/{id}/token — A2A 호출 토큰 발급(브로커). {id}=호출 대상.
 // 요청 본문 없음. 대상 미존재 404. (대상별 호출 ACL 은 v2 — 지금은 인증 멤버 누구나 발급 가능.)
 func (h *AgentRegistryHandler) MintToken(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	tok, err := h.svc.MintToken(r.Context(), claims.MemberID, r.PathValue("id"))
+	tok, err := h.svc.MintToken(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return agentRegistryErrToHTTP(err)
 	}

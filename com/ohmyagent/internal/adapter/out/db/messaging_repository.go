@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -65,6 +64,33 @@ func (r *MessagingRepository) Create(ctx context.Context, room domainmessaging.R
 
 const roomCols = "id, type, name, direct_key, created_by, created_at"
 
+// scanID 는 단일 문자열 컬럼(member_id 등) 결과를 읽는다.
+func scanID(s rowScanner) (string, error) {
+	var id string
+	err := s.Scan(&id)
+	return id, err
+}
+
+func scanReadState(s rowScanner) (domainmessaging.ReadState, error) {
+	var rs domainmessaging.ReadState
+	err := s.Scan(&rs.MemberID, &rs.LastReadAt)
+	return rs, err
+}
+
+func scanAdminRoom(s rowScanner) (domainmessaging.AdminRoom, error) {
+	var (
+		ar                 domainmessaging.AdminRoom
+		typ                string
+		name, dkey, crtdBy sql.NullString
+	)
+	if err := s.Scan(&ar.ID, &typ, &name, &dkey, &crtdBy, &ar.CreatedAt, &ar.MemberCount, &ar.MessageCount, &ar.LastActivity); err != nil {
+		return domainmessaging.AdminRoom{}, err
+	}
+	ar.Type = domainmessaging.RoomType(typ)
+	ar.Name, ar.DirectKey, ar.CreatedBy = name.String, dkey.String, crtdBy.String
+	return ar, nil
+}
+
 func scanRoom(s rowScanner) (domainmessaging.Room, error) {
 	var (
 		room               domainmessaging.Room
@@ -81,67 +107,30 @@ func scanRoom(s rowScanner) (domainmessaging.Room, error) {
 
 // Get 은 방을 반환한다(없으면 ErrRoomNotFound).
 func (r *MessagingRepository) Get(ctx context.Context, roomID string) (domainmessaging.Room, error) {
-	room, err := scanRoom(r.db.QueryRowContext(ctx, "SELECT "+roomCols+" FROM chat_rooms WHERE id=?", roomID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainmessaging.Room{}, domainmessaging.ErrRoomNotFound
-	}
-	if err != nil {
-		return domainmessaging.Room{}, fmt.Errorf("messaging: get room: %w", err)
-	}
-	return room, nil
+	return queryOne(ctx, r.db, "messaging: get room", domainmessaging.ErrRoomNotFound, scanRoom,
+		"SELECT "+roomCols+" FROM chat_rooms WHERE id=?", roomID)
 }
 
 // FindDirect 는 정준 키로 기존 1:1 방을 찾는다(없으면 ErrRoomNotFound).
 func (r *MessagingRepository) FindDirect(ctx context.Context, directKey string) (domainmessaging.Room, error) {
-	room, err := scanRoom(r.db.QueryRowContext(ctx, "SELECT "+roomCols+" FROM chat_rooms WHERE direct_key=?", directKey))
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainmessaging.Room{}, domainmessaging.ErrRoomNotFound
-	}
-	if err != nil {
-		return domainmessaging.Room{}, fmt.Errorf("messaging: find direct: %w", err)
-	}
-	return room, nil
+	return queryOne(ctx, r.db, "messaging: find direct", domainmessaging.ErrRoomNotFound, scanRoom,
+		"SELECT "+roomCols+" FROM chat_rooms WHERE direct_key=?", directKey)
 }
 
 // ListForMember 는 멤버가 속한 방을 최근 활동(마지막 메시지)순으로 반환한다.
 func (r *MessagingRepository) ListForMember(ctx context.Context, memberID string) ([]domainmessaging.Room, error) {
-	rows, err := r.db.QueryContext(ctx,
+	return queryList(ctx, r.db, "messaging: list rooms", scanRoom,
 		"SELECT r.id, r.type, r.name, r.direct_key, r.created_by, r.created_at "+
 			"FROM chat_rooms r JOIN chat_room_members m ON m.room_id = r.id "+
 			"WHERE m.member_id = ? "+
 			"ORDER BY COALESCE((SELECT MAX(created_at) FROM chat_messages cm WHERE cm.room_id = r.id), r.created_at) DESC",
 		memberID)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: list rooms: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainmessaging.Room
-	for rows.Next() {
-		room, err := scanRoom(rows)
-		if err != nil {
-			return nil, fmt.Errorf("messaging: scan room: %w", err)
-		}
-		out = append(out, room)
-	}
-	return out, rows.Err()
 }
 
 // Members 는 방의 멤버 ID 목록을 반환한다.
 func (r *MessagingRepository) Members(ctx context.Context, roomID string) ([]string, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT member_id FROM chat_room_members WHERE room_id=?", roomID)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: members: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("messaging: scan member: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return queryList(ctx, r.db, "messaging: members", scanID,
+		"SELECT member_id FROM chat_room_members WHERE room_id=?", roomID)
 }
 
 // IsMember 는 멤버가 방에 속하는지 반환한다.
@@ -178,31 +167,12 @@ func (r *MessagingRepository) ListAllRooms(ctx context.Context, limit int) ([]do
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	rows, err := r.db.QueryContext(ctx,
+	return queryList(ctx, r.db, "messaging: list all rooms", scanAdminRoom,
 		"SELECT r.id, r.type, r.name, r.direct_key, r.created_by, r.created_at, "+
 			"(SELECT COUNT(*) FROM chat_room_members m WHERE m.room_id=r.id), "+
 			"(SELECT COUNT(*) FROM chat_messages cm WHERE cm.room_id=r.id), "+
 			"COALESCE((SELECT MAX(created_at) FROM chat_messages cm WHERE cm.room_id=r.id), r.created_at) AS last_act "+
 			"FROM chat_rooms r ORDER BY last_act DESC LIMIT ?", limit)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: list all rooms: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainmessaging.AdminRoom
-	for rows.Next() {
-		var (
-			ar                 domainmessaging.AdminRoom
-			typ                string
-			name, dkey, crtdBy sql.NullString
-		)
-		if err := rows.Scan(&ar.ID, &typ, &name, &dkey, &crtdBy, &ar.CreatedAt, &ar.MemberCount, &ar.MessageCount, &ar.LastActivity); err != nil {
-			return nil, fmt.Errorf("messaging: scan admin room: %w", err)
-		}
-		ar.Type = domainmessaging.RoomType(typ)
-		ar.Name, ar.DirectKey, ar.CreatedBy = name.String, dkey.String, crtdBy.String
-		out = append(out, ar)
-	}
-	return out, rows.Err()
 }
 
 // DeleteRoom 은 방 + 멤버십 + 메시지를 한 트랜잭션으로 삭제한다(어드민). 첨부 바이너리는 유지.
@@ -264,20 +234,8 @@ func (r *MessagingRepository) UnreadByRoom(ctx context.Context, memberID string)
 
 // ReadStates 는 방의 멤버별 읽음 위치를 반환한다.
 func (r *MessagingRepository) ReadStates(ctx context.Context, roomID string) ([]domainmessaging.ReadState, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT member_id, last_read_at FROM chat_room_members WHERE room_id=?", roomID)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: read states: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainmessaging.ReadState
-	for rows.Next() {
-		var rs domainmessaging.ReadState
-		if err := rows.Scan(&rs.MemberID, &rs.LastReadAt); err != nil {
-			return nil, fmt.Errorf("messaging: scan read state: %w", err)
-		}
-		out = append(out, rs)
-	}
-	return out, rows.Err()
+	return queryList(ctx, r.db, "messaging: read states", scanReadState,
+		"SELECT member_id, last_read_at FROM chat_room_members WHERE room_id=?", roomID)
 }
 
 // AddMembers 는 멤버를 방에 추가한다(이미 멤버면 무시). last_read_at 은 joinedAt 으로 시작(가입 전 메시지 안읽음 제외).
@@ -316,53 +274,18 @@ func (r *MessagingRepository) RemoveMember(ctx context.Context, roomID, memberID
 func (r *MessagingRepository) Save(ctx context.Context, m domainmessaging.Message) error {
 	if _, err := r.db.ExecContext(ctx,
 		"INSERT INTO chat_messages (id, room_id, sender_id, content, created_at, mentions, attachments) VALUES (?,?,?,?,?,?,?)",
-		m.ID, m.RoomID, m.SenderID, m.Content, m.CreatedAt, encodeMentions(m.Mentions), encodeAttachments(m.Attachments),
+		m.ID, m.RoomID, m.SenderID, m.Content, m.CreatedAt, encodeJSONList(m.Mentions), encodeJSONList(m.Attachments),
 	); err != nil {
 		return fmt.Errorf("messaging: save message: %w", err)
 	}
 	return nil
 }
 
-func encodeMentions(v []string) string {
-	if len(v) == 0 {
-		return ""
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
-func encodeAttachments(v []domainmessaging.Attachment) string {
-	if len(v) == 0 {
-		return ""
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
-
 // CoMembers 는 member 와 한 방이라도 공유하는 모든 멤버 ID(본인 포함, 중복 제거)를 반환한다.
 func (r *MessagingRepository) CoMembers(ctx context.Context, memberID string) ([]string, error) {
-	rows, err := r.db.QueryContext(ctx,
+	return queryList(ctx, r.db, "messaging: co-members", scanID,
 		"SELECT DISTINCT m2.member_id FROM chat_room_members m1 JOIN chat_room_members m2 ON m1.room_id = m2.room_id WHERE m1.member_id = ?",
 		memberID)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: co-members: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("messaging: scan co-member: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
 }
 
 // Mentioning 은 memberID 가 멘션된 최신 메시지(삭제 제외)를 limit 개 반환한다.
@@ -371,22 +294,9 @@ func (r *MessagingRepository) Mentioning(ctx context.Context, memberID string, l
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx,
+	return queryList(ctx, r.db, "messaging: mentioning", scanMessage,
 		"SELECT "+messageCols+" FROM chat_messages WHERE deleted_at=0 AND mentions LIKE ? ORDER BY created_at DESC LIMIT ?",
 		"%\""+memberID+"\"%", limit)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: mentioning: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainmessaging.Message
-	for rows.Next() {
-		m, err := scanMessage(rows)
-		if err != nil {
-			return nil, fmt.Errorf("messaging: scan mention: %w", err)
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
 }
 
 const messageCols = "id, room_id, sender_id, content, created_at, edited_at, deleted_at, mentions, attachments"
@@ -399,31 +309,9 @@ func scanMessage(s rowScanner) (domainmessaging.Message, error) {
 	if err := s.Scan(&m.ID, &m.RoomID, &m.SenderID, &m.Content, &m.CreatedAt, &m.EditedAt, &m.DeletedAt, &mentions, &attachments); err != nil {
 		return domainmessaging.Message{}, err
 	}
-	m.Mentions = decodeMentions(mentions.String)
-	m.Attachments = decodeAttachments(attachments.String)
+	m.Mentions = decodeJSONList[string](mentions.String)
+	m.Attachments = decodeJSONList[domainmessaging.Attachment](attachments.String)
 	return m, nil
-}
-
-func decodeMentions(s string) []string {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	var out []string
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil
-	}
-	return out
-}
-
-func decodeAttachments(s string) []domainmessaging.Attachment {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	var out []domainmessaging.Attachment
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil
-	}
-	return out
 }
 
 // List 는 방의 메시지를 최신순으로 반환한다(beforeID 가 있으면 그 메시지 이전 페이지). 삭제 메시지도 포함(content 빔).
@@ -440,32 +328,13 @@ func (r *MessagingRepository) List(ctx context.Context, roomID string, limit int
 	query += " ORDER BY created_at DESC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("messaging: list messages: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domainmessaging.Message
-	for rows.Next() {
-		m, err := scanMessage(rows)
-		if err != nil {
-			return nil, fmt.Errorf("messaging: scan message: %w", err)
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return queryList(ctx, r.db, "messaging: list messages", scanMessage, query, args...)
 }
 
 // Get 은 메시지 한 건을 반환한다(없으면 ErrMessageNotFound).
 func (r *MessagingRepository) GetMessage(ctx context.Context, messageID string) (domainmessaging.Message, error) {
-	m, err := scanMessage(r.db.QueryRowContext(ctx, "SELECT "+messageCols+" FROM chat_messages WHERE id=?", messageID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return domainmessaging.Message{}, domainmessaging.ErrMessageNotFound
-	}
-	if err != nil {
-		return domainmessaging.Message{}, fmt.Errorf("messaging: get message: %w", err)
-	}
-	return m, nil
+	return queryOne(ctx, r.db, "messaging: get message", domainmessaging.ErrMessageNotFound, scanMessage,
+		"SELECT "+messageCols+" FROM chat_messages WHERE id=?", messageID)
 }
 
 // UpdateContent 는 메시지 본문을 수정하고 editedAt 을 기록한다(삭제된 건 제외).

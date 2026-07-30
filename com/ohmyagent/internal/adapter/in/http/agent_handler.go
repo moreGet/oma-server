@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	domainagent "aiagent/com/ohmyagent/internal/domain/agent"
 	domainauth "aiagent/com/ohmyagent/internal/domain/auth"
 	domainllmprovider "aiagent/com/ohmyagent/internal/domain/llmprovider"
@@ -40,18 +39,16 @@ func NewAgentHandler(svc domainagent.Service, recorder domaintranscript.Recorder
 //
 // 스트리밍 시작 전 오류는 HandleAgent 가 중첩 JSON 에러로 직렬화한다.
 func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	claims, _ := security.ClaimsFrom(r.Context())
-
-	var req agentChatReq
-	if err := decodeJSON(w, r, maxLargeJSONBytes, &req); err != nil {
+	actor := actorID(r)
+	req, err := bindJSON[agentChatReq](w, r, maxLargeJSONBytes)
+	if err != nil {
 		return err
 	}
-	cmd := req.toCommand(claims.MemberID)
+	cmd := req.toCommand(actor)
 
 	// 쿼터 사전 검사: 이번 달 한도 초과면 스트리밍 시작 전 429.
 	if h.quota != nil {
-		if err := h.quota.Check(r.Context(), claims.MemberID); err != nil {
+		if err := h.quota.Check(r.Context(), actor); err != nil {
 			return agentErrToHTTP(err)
 		}
 	}
@@ -104,14 +101,14 @@ func (h *AgentHandler) Chat(w http.ResponseWriter, r *http.Request) error {
 
 	// 정상 완료 시: 감사 이벤트 + 대화 이력 비동기 기록 + 쿼터 사용량 누적(usage 없으면 추정치).
 	response := respBuf.String()
-	h.recordAgent(claims.MemberID, req, response, stopReason, usage, start)
+	h.recordAgent(actor, req, response, stopReason, usage, start)
 	if h.quota != nil {
 		total := 0
 		if usage != nil {
 			total = usage.TotalTokens
 		}
 		ctx, cancel := accountingCtx(r)
-		h.quota.Add(ctx, claims.MemberID, quotaTokens(total, func() string { return req.promptText() + response }))
+		h.quota.Add(ctx, actor, quotaTokens(total, func() string { return req.promptText() + response }))
 		cancel()
 	}
 

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"aiagent/com/ohmyagent/internal/adapter/in/http/security"
 	messagingapp "aiagent/com/ohmyagent/internal/application/messaging"
 	domainmessaging "aiagent/com/ohmyagent/internal/domain/messaging"
 )
@@ -147,6 +146,14 @@ func toRoomDTO(r domainmessaging.Room) roomDTO {
 	return roomDTO{ID: r.ID, Type: string(r.Type), Name: r.Name, CreatedAt: r.CreatedAt}
 }
 
+func toReadStateDTO(s domainmessaging.ReadState) readStateDTO {
+	return readStateDTO{MemberID: s.MemberID, LastReadAt: s.LastReadAt}
+}
+
+func toMemberDetailDTO(mi domainmessaging.MemberInfo) memberDetailDTO {
+	return memberDetailDTO{ID: mi.ID, Username: mi.Username, DisplayName: mi.DisplayName}
+}
+
 func toMessageDTO(m domainmessaging.Message) roomMessageDTO {
 	return roomMessageDTO{
 		ID: m.ID, RoomID: m.RoomID, SenderID: m.SenderID, Content: m.Content,
@@ -158,12 +165,12 @@ func toMessageDTO(m domainmessaging.Message) roomMessageDTO {
 
 // ListRooms 는 GET /api/v1/chat/rooms — 본인이 속한 방 목록(방별 안읽음 수 포함).
 func (h *MessagingHandler) ListRooms(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	rooms, err := h.svc.ListRooms(r.Context(), claims.MemberID)
+	actor := actorID(r)
+	rooms, err := h.svc.ListRooms(r.Context(), actor)
 	if err != nil {
 		return messagingErr(err)
 	}
-	unread, err := h.svc.UnreadByRoom(r.Context(), claims.MemberID)
+	unread, err := h.svc.UnreadByRoom(r.Context(), actor)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -179,8 +186,7 @@ func (h *MessagingHandler) ListRooms(w http.ResponseWriter, r *http.Request) err
 
 // Unread 는 GET /api/v1/chat/unread — 총/방별 안읽음 수(배지용).
 func (h *MessagingHandler) Unread(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	byRoom, err := h.svc.UnreadByRoom(r.Context(), claims.MemberID)
+	byRoom, err := h.svc.UnreadByRoom(r.Context(), actorID(r))
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -198,8 +204,7 @@ func (h *MessagingHandler) Unread(w http.ResponseWriter, r *http.Request) error 
 
 // MarkRead 는 POST /api/v1/chat/rooms/{id}/read — 방을 지금까지 읽음 처리.
 func (h *MessagingHandler) MarkRead(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	readAt, err := h.svc.MarkRead(r.Context(), claims.MemberID, r.PathValue("id"))
+	readAt, err := h.svc.MarkRead(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -209,28 +214,21 @@ func (h *MessagingHandler) MarkRead(w http.ResponseWriter, r *http.Request) erro
 
 // ReadStates 는 GET /api/v1/chat/rooms/{id}/reads — 멤버별 읽음 위치(읽음 표시 렌더용).
 func (h *MessagingHandler) ReadStates(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	states, err := h.svc.ReadStates(r.Context(), claims.MemberID, r.PathValue("id"))
+	states, err := h.svc.ReadStates(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return messagingErr(err)
 	}
-	out := make([]readStateDTO, 0, len(states))
-	for _, s := range states {
-		out = append(out, readStateDTO{MemberID: s.MemberID, LastReadAt: s.LastReadAt})
-	}
-	writeJSON(w, http.StatusOK, readStatesResp{Reads: out})
+	writeJSON(w, http.StatusOK, readStatesResp{Reads: mapSlice(states, toReadStateDTO)})
 	return nil
 }
 
 // CreateGroup 은 POST /api/v1/chat/rooms — 단체 방 생성.
 func (h *MessagingHandler) CreateGroup(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req createGroupReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[createGroupReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
-	room, err := h.svc.CreateGroup(r.Context(), claims.MemberID, req.Name, req.MemberIDs)
+	room, err := h.svc.CreateGroup(r.Context(), actorID(r), req.Name, req.MemberIDs)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -240,13 +238,11 @@ func (h *MessagingHandler) CreateGroup(w http.ResponseWriter, r *http.Request) e
 
 // CreateDirect 는 POST /api/v1/chat/rooms/direct — 1:1 방 가져오기/생성.
 func (h *MessagingHandler) CreateDirect(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req createDirectReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[createDirectReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
-	room, err := h.svc.CreateDirect(r.Context(), claims.MemberID, req.UserID)
+	room, err := h.svc.CreateDirect(r.Context(), actorID(r), req.UserID)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -256,31 +252,24 @@ func (h *MessagingHandler) CreateDirect(w http.ResponseWriter, r *http.Request) 
 
 // History 는 GET /api/v1/chat/rooms/{id}/messages — 메시지 이력(최신순).
 func (h *MessagingHandler) History(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	roomID := r.PathValue("id")
 	limit := atoiDefault(r.URL.Query().Get("limit"), defaultMessageHistoryLimit)
 	before := r.URL.Query().Get("before")
-	msgs, err := h.svc.History(r.Context(), claims.MemberID, roomID, limit, before)
+	msgs, err := h.svc.History(r.Context(), actorID(r), roomID, limit, before)
 	if err != nil {
 		return messagingErr(err)
 	}
-	out := make([]roomMessageDTO, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, toMessageDTO(m))
-	}
-	writeJSON(w, http.StatusOK, messagesResp{Messages: out})
+	writeJSON(w, http.StatusOK, messagesResp{Messages: mapSlice(msgs, toMessageDTO)})
 	return nil
 }
 
 // SendMessage 는 POST /api/v1/chat/rooms/{id}/messages — REST 로 메시지 전송(WS 대안).
 func (h *MessagingHandler) SendMessage(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req sendMessageReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[sendMessageReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
-	msg, err := h.svc.SendMessage(r.Context(), claims.MemberID, r.PathValue("id"), req.Content, req.Mentions, req.Attachments)
+	msg, err := h.svc.SendMessage(r.Context(), actorID(r), r.PathValue("id"), req.Content, req.Mentions, req.Attachments)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -290,13 +279,11 @@ func (h *MessagingHandler) SendMessage(w http.ResponseWriter, r *http.Request) e
 
 // EditMessage 는 PATCH /api/v1/chat/rooms/{id}/messages/{mid} — 본인 메시지 수정.
 func (h *MessagingHandler) EditMessage(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req editMessageReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[editMessageReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
-	msg, err := h.svc.EditMessage(r.Context(), claims.MemberID, r.PathValue("id"), r.PathValue("mid"), req.Content)
+	msg, err := h.svc.EditMessage(r.Context(), actorID(r), r.PathValue("id"), r.PathValue("mid"), req.Content)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -306,8 +293,7 @@ func (h *MessagingHandler) EditMessage(w http.ResponseWriter, r *http.Request) e
 
 // DeleteMessage 는 DELETE /api/v1/chat/rooms/{id}/messages/{mid} — 본인 메시지 소프트 삭제.
 func (h *MessagingHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.DeleteMessage(r.Context(), claims.MemberID, r.PathValue("id"), r.PathValue("mid")); err != nil {
+	if err := h.svc.DeleteMessage(r.Context(), actorID(r), r.PathValue("id"), r.PathValue("mid")); err != nil {
 		return messagingErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -316,24 +302,19 @@ func (h *MessagingHandler) DeleteMessage(w http.ResponseWriter, r *http.Request)
 
 // RoomMembers 는 GET /api/v1/chat/rooms/{id}/members — 방 멤버 목록.
 func (h *MessagingHandler) RoomMembers(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	roomID := r.PathValue("id")
 
 	// ?detail=1 → 이름(username/display_name) 포함(방 멤버 누구나). 무인자는 기존 UUID 배열(하위호환).
 	if r.URL.Query().Get("detail") == "1" {
-		infos, err := h.svc.RoomMembersDetail(r.Context(), claims.MemberID, roomID)
+		infos, err := h.svc.RoomMembersDetail(r.Context(), actorID(r), roomID)
 		if err != nil {
 			return messagingErr(err)
 		}
-		out := make([]memberDetailDTO, 0, len(infos))
-		for _, mi := range infos {
-			out = append(out, memberDetailDTO{ID: mi.ID, Username: mi.Username, DisplayName: mi.DisplayName})
-		}
-		writeJSON(w, http.StatusOK, membersDetailResp{Members: out})
+		writeJSON(w, http.StatusOK, membersDetailResp{Members: mapSlice(infos, toMemberDetailDTO)})
 		return nil
 	}
 
-	members, err := h.svc.RoomMembers(r.Context(), claims.MemberID, roomID)
+	members, err := h.svc.RoomMembers(r.Context(), actorID(r), roomID)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -343,13 +324,11 @@ func (h *MessagingHandler) RoomMembers(w http.ResponseWriter, r *http.Request) e
 
 // AddMembers 는 POST /api/v1/chat/rooms/{id}/members — 단체 방에 멤버 추가.
 func (h *MessagingHandler) AddMembers(w http.ResponseWriter, r *http.Request) error {
-	defer func() { _ = r.Body.Close() }()
-	var req addMembersReq
-	if err := decodeJSON(w, r, maxJSONBytes, &req); err != nil {
+	req, err := bindJSON[addMembersReq](w, r, maxJSONBytes)
+	if err != nil {
 		return err
 	}
-	claims, _ := security.ClaimsFrom(r.Context())
-	members, err := h.svc.AddMembers(r.Context(), claims.MemberID, r.PathValue("id"), req.MemberIDs)
+	members, err := h.svc.AddMembers(r.Context(), actorID(r), r.PathValue("id"), req.MemberIDs)
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -359,8 +338,7 @@ func (h *MessagingHandler) AddMembers(w http.ResponseWriter, r *http.Request) er
 
 // Leave 는 POST /api/v1/chat/rooms/{id}/leave — 본인이 방에서 나가기.
 func (h *MessagingHandler) Leave(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.LeaveRoom(r.Context(), claims.MemberID, r.PathValue("id")); err != nil {
+	if err := h.svc.LeaveRoom(r.Context(), actorID(r), r.PathValue("id")); err != nil {
 		return messagingErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -369,8 +347,7 @@ func (h *MessagingHandler) Leave(w http.ResponseWriter, r *http.Request) error {
 
 // Kick 은 DELETE /api/v1/chat/rooms/{id}/members/{mid} — 방 생성자가 멤버 강퇴.
 func (h *MessagingHandler) Kick(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	if err := h.svc.KickMember(r.Context(), claims.MemberID, r.PathValue("id"), r.PathValue("mid")); err != nil {
+	if err := h.svc.KickMember(r.Context(), actorID(r), r.PathValue("id"), r.PathValue("mid")); err != nil {
 		return messagingErr(err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -379,8 +356,7 @@ func (h *MessagingHandler) Kick(w http.ResponseWriter, r *http.Request) error {
 
 // Presence 는 GET /api/v1/chat/rooms/{id}/presence — 방 멤버 중 온라인 목록.
 func (h *MessagingHandler) Presence(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
-	online, err := h.svc.RoomPresence(r.Context(), claims.MemberID, r.PathValue("id"))
+	online, err := h.svc.RoomPresence(r.Context(), actorID(r), r.PathValue("id"))
 	if err != nil {
 		return messagingErr(err)
 	}
@@ -390,17 +366,12 @@ func (h *MessagingHandler) Presence(w http.ResponseWriter, r *http.Request) erro
 
 // Mentions 는 GET /api/v1/chat/mentions?limit= — 나를 멘션한 최신 메시지(알림 피드).
 func (h *MessagingHandler) Mentions(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	limit := atoiDefault(r.URL.Query().Get("limit"), defaultMessageHistoryLimit)
-	msgs, err := h.svc.MentionsFeed(r.Context(), claims.MemberID, limit)
+	msgs, err := h.svc.MentionsFeed(r.Context(), actorID(r), limit)
 	if err != nil {
 		return messagingErr(err)
 	}
-	out := make([]roomMessageDTO, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, toMessageDTO(m))
-	}
-	writeJSON(w, http.StatusOK, messagesResp{Messages: out})
+	writeJSON(w, http.StatusOK, messagesResp{Messages: mapSlice(msgs, toMessageDTO)})
 	return nil
 }
 
@@ -414,7 +385,6 @@ const multipartMemoryBudget = 1 << 20 // 1 MiB
 
 // UploadAttachment 는 POST /api/v1/chat/attachments — multipart 파일 업로드 → 첨부 메타데이터(다운로드 URL).
 func (h *MessagingHandler) UploadAttachment(w http.ResponseWriter, r *http.Request) error {
-	claims, _ := security.ClaimsFrom(r.Context())
 	// 본문 크기 상한(헤더/멀티파트 오버헤드 여유 1MiB).
 	r.Body = http.MaxBytesReader(w, r.Body, domainmessaging.MaxAttachmentBytes+(1<<20))
 	if err := r.ParseMultipartForm(multipartMemoryBudget); err != nil {
@@ -444,7 +414,7 @@ func (h *MessagingHandler) UploadAttachment(w http.ResponseWriter, r *http.Reque
 		return ErrBadRequest("failed to read file")
 	}
 	contentType := header.Header.Get("Content-Type")
-	att, err := h.svc.UploadAttachment(r.Context(), claims.MemberID, header.Filename, contentType, data)
+	att, err := h.svc.UploadAttachment(r.Context(), actorID(r), header.Filename, contentType, data)
 	if err != nil {
 		return messagingErr(err)
 	}
